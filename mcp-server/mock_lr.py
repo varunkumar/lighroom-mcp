@@ -141,7 +141,7 @@ class _State:
                 return {"success": True, "message": "All develop settings reset"}
 
             if cmd == "export_preview":
-                size = min(int(req.get("size", 200)), 2048)
+                size = max(1, min(int(req.get("size", 200)), 2048))
                 b64 = _make_jpeg(self.settings, size)
                 return {
                     "success": True,

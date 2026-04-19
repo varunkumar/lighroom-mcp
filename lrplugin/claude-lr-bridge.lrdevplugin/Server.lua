@@ -238,6 +238,36 @@ local function exportPreview(size)
     return base64Encode(jpegData), nil
 end
 
+local function batchApplySettings(settings)
+    local catalog = LrApplication.activeCatalog()
+    local photos  = catalog:getTargetPhotos()   -- all selected photos
+
+    if not photos or #photos == 0 then
+        return false, "No photos selected"
+    end
+
+    LrDevelopController.revealPanelForParameter("Exposure")
+
+    local count   = 0
+    local skipped = 0
+
+    catalog:withWriteAccessDo("Claude Batch Edit", function()
+        for _, photo in ipairs(photos) do
+            catalog:setSelectedPhotos(photo, { photo })
+            for key, value in pairs(settings) do
+                local paramName = PARAM_INDEX[key:lower()] or key
+                local ok = pcall(function()
+                    LrDevelopController.setValue(paramName, tonumber(value) or value)
+                end)
+                if not ok then skipped = skipped + 1 end
+            end
+            count = count + 1
+        end
+    end)
+
+    return true, string.format("Applied to %d photos, %d skipped", count, skipped)
+end
+
 local function handleRequest(data)
     local ok, req = pcall(LrJSON.decode, data)
     if not ok or type(req) ~= "table" then
@@ -277,6 +307,10 @@ local function handleRequest(data)
         else
             response = { success = false, error = err }
         end
+
+    elseif cmd == "batch_apply_settings" then
+        local ok, msg = batchApplySettings(req.settings or {})
+        response = { success = ok, message = msg }
 
     else
         response = { success = false, error = "Unknown command: " .. tostring(cmd) }

@@ -1,0 +1,4 @@
+.worktrees/
+mcp-server/venv/
+mcp-server/__pycache__/
+mcp-server/*.pyc

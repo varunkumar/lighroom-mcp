@@ -13,6 +13,62 @@ local LrCatalog    = import "LrCatalog"
 local LrLogger     = import "LrLogger"
 local LrJSON       = import "LrJSON"
 
+-- ── Base64 encoder ──────────────────────────────────────────────────────────
+local _b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function base64Encode(data)
+    local result = {}
+    local bytes  = { data:byte(1, #data) }
+    local padding = (3 - #bytes % 3) % 3
+    for _ = 1, padding do bytes[#bytes + 1] = 0 end
+
+    for i = 1, #bytes, 3 do
+        local b1, b2, b3 = bytes[i], bytes[i + 1], bytes[i + 2]
+        local n = b1 * 65536 + b2 * 256 + b3
+        result[#result + 1] = _b64:sub(math.floor(n / 262144) % 64 + 1, math.floor(n / 262144) % 64 + 1)
+        result[#result + 1] = _b64:sub(math.floor(n /   4096) % 64 + 1, math.floor(n /   4096) % 64 + 1)
+        result[#result + 1] = _b64:sub(math.floor(n /     64) % 64 + 1, math.floor(n /     64) % 64 + 1)
+        result[#result + 1] = _b64:sub(              n        % 64 + 1,               n        % 64 + 1)
+    end
+
+    local encoded = table.concat(result)
+    return encoded:sub(1, #encoded - padding) .. string.rep("=", padding)
+end
+
+-- ── Length-prefix framing helpers ───────────────────────────────────────────
+
+local function recvMessage(client)
+    -- Read 4-byte big-endian uint32 header
+    local hdr = ""
+    while #hdr < 4 do
+        local chunk, err = client:receive(4 - #hdr)
+        if err then return nil, "recv header: " .. tostring(err) end
+        hdr = hdr .. chunk
+    end
+    local b1, b2, b3, b4 = hdr:byte(1, 4)
+    local msgLen = b1 * 16777216 + b2 * 65536 + b3 * 256 + b4
+
+    -- Read exact payload
+    local buf = ""
+    while #buf < msgLen do
+        local chunk, err = client:receive(math.min(4096, msgLen - #buf))
+        if err then return nil, "recv body: " .. tostring(err) end
+        buf = buf .. chunk
+    end
+    return buf, nil
+end
+
+local function sendMessage(client, payload)
+    local len = #payload
+    local hdr = string.char(
+        math.floor(len / 16777216) % 256,
+        math.floor(len /    65536) % 256,
+        math.floor(len /      256) % 256,
+        len % 256
+    )
+    client:send(hdr .. payload)
+end
+
 local log = LrLogger("ClaudeLRBridge")
 log:enable("logfile")
 
@@ -155,6 +211,63 @@ local function resetAllSettings()
     return true, "All develop settings reset"
 end
 
+local function exportPreview(size)
+    local photo = getCurrentPhoto()
+    if not photo then return nil, "No photo selected" end
+
+    local thumbSize = math.min(tonumber(size) or 1500, 2048)
+    local jpegData  = nil
+    local done      = false
+
+    -- requestJpegThumbnail is callback-based; poll until the callback fires
+    photo:requestJpegThumbnail(thumbSize, thumbSize, function(jpeg, _reason)
+        jpegData = jpeg
+        done     = true
+    end)
+
+    local elapsed = 0
+    while not done and elapsed < 5.0 do
+        LrTasks.sleep(0.05)
+        elapsed = elapsed + 0.05
+    end
+
+    if not jpegData then
+        return nil, "Thumbnail timed out or unavailable"
+    end
+
+    return base64Encode(jpegData), nil
+end
+
+local function batchApplySettings(settings)
+    local catalog = LrApplication.activeCatalog()
+    local photos  = catalog:getTargetPhotos()   -- all selected photos
+
+    if not photos or #photos == 0 then
+        return false, "No photos selected"
+    end
+
+    LrDevelopController.revealPanelForParameter("Exposure")
+
+    local count   = 0
+    local skipped = 0
+
+    catalog:withWriteAccessDo("Claude Batch Edit", function()
+        for _, photo in ipairs(photos) do
+            catalog:setSelectedPhotos(photo, { photo })
+            for key, value in pairs(settings) do
+                local paramName = PARAM_INDEX[key:lower()] or key
+                local ok = pcall(function()
+                    LrDevelopController.setValue(paramName, tonumber(value) or value)
+                end)
+                if not ok then skipped = skipped + 1 end
+            end
+            count = count + 1
+        end
+    end)
+
+    return true, string.format("Applied to %d photos, %d skipped", count, skipped)
+end
+
 local function handleRequest(data)
     local ok, req = pcall(LrJSON.decode, data)
     if not ok or type(req) ~= "table" then
@@ -187,6 +300,18 @@ local function handleRequest(data)
         local s, msg = resetAllSettings()
         response = { success = s, message = msg }
 
+    elseif cmd == "export_preview" then
+        local b64, err = exportPreview(req.size)
+        if b64 then
+            response = { success = true, data = b64 }
+        else
+            response = { success = false, error = err }
+        end
+
+    elseif cmd == "batch_apply_settings" then
+        local ok, msg = batchApplySettings(req.settings or {})
+        response = { success = ok, message = msg }
+
     else
         response = { success = false, error = "Unknown command: " .. tostring(cmd) }
     end
@@ -214,20 +339,12 @@ function Server.start()
         local client, cerr = server:accept(1.0)  -- 1 second timeout
         if client then
             LrTasks.startAsyncTask(function()
-                -- Read until newline delimiter
-                local buf = ""
-                while true do
-                    local chunk, rerr = client:receive(1024)
-                    if rerr then break end
-                    if chunk then
-                        buf = buf .. chunk
-                        if buf:find("\n") then break end
-                    end
-                end
-                buf = buf:gsub("\n", "")
-                if #buf > 0 then
-                    local responseStr = handleRequest(buf)
-                    client:send(responseStr .. "\n")
+                local data, err = recvMessage(client)
+                if data and #data > 0 then
+                    local responseStr = handleRequest(data)
+                    sendMessage(client, responseStr)
+                elseif err then
+                    log:error("Read error: " .. err)
                 end
                 client:close()
             end)

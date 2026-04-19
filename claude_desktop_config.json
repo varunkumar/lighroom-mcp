@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "lightroom": {
+      "command": "python3",
+      "args": ["/path/to/lightroom-mcp/mcp-server/server.py"]
+    }
+  }
+}

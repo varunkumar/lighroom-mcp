@@ -6,6 +6,7 @@ Communicates with the Lua plugin running inside Lightroom via TCP socket.
 """
 
 import json
+import struct
 import socket
 import sys
 from mcp.server import Server
@@ -20,25 +21,34 @@ app = Server("lightroom-bridge")
 
 
 def send_to_lightroom(command: dict) -> dict:
-    """Send a JSON command to the Lightroom plugin and return the response."""
+    """Send a length-prefixed JSON command to the Lightroom plugin."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(TIMEOUT)
         sock.connect((LR_HOST, LR_PORT))
-        payload = json.dumps(command) + "\n"
-        sock.sendall(payload.encode("utf-8"))
 
-        # Read until newline
-        buf = b""
-        while True:
-            chunk = sock.recv(4096)
+        payload = json.dumps(command).encode("utf-8")
+        sock.sendall(struct.pack(">I", len(payload)) + payload)
+
+        # Read 4-byte length header
+        hdr = b""
+        while len(hdr) < 4:
+            chunk = sock.recv(4 - len(hdr))
             if not chunk:
-                break
+                raise ConnectionError("Connection closed reading header")
+            hdr += chunk
+        (msg_len,) = struct.unpack(">I", hdr)
+
+        # Read exact payload
+        buf = b""
+        while len(buf) < msg_len:
+            chunk = sock.recv(min(4096, msg_len - len(buf)))
+            if not chunk:
+                raise ConnectionError("Connection closed reading payload")
             buf += chunk
-            if b"\n" in buf:
-                break
+
         sock.close()
-        return json.loads(buf.decode("utf-8").strip())
+        return json.loads(buf.decode("utf-8"))
     except ConnectionRefusedError:
         return {
             "success": False,

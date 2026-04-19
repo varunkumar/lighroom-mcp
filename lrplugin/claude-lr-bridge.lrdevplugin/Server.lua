@@ -13,6 +13,62 @@ local LrCatalog    = import "LrCatalog"
 local LrLogger     = import "LrLogger"
 local LrJSON       = import "LrJSON"
 
+-- ── Base64 encoder ──────────────────────────────────────────────────────────
+local _b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function base64Encode(data)
+    local result = {}
+    local bytes  = { data:byte(1, #data) }
+    local padding = (3 - #bytes % 3) % 3
+    for _ = 1, padding do bytes[#bytes + 1] = 0 end
+
+    for i = 1, #bytes, 3 do
+        local b1, b2, b3 = bytes[i], bytes[i + 1], bytes[i + 2]
+        local n = b1 * 65536 + b2 * 256 + b3
+        result[#result + 1] = _b64:sub(math.floor(n / 262144) % 64 + 1, math.floor(n / 262144) % 64 + 1)
+        result[#result + 1] = _b64:sub(math.floor(n /   4096) % 64 + 1, math.floor(n /   4096) % 64 + 1)
+        result[#result + 1] = _b64:sub(math.floor(n /     64) % 64 + 1, math.floor(n /     64) % 64 + 1)
+        result[#result + 1] = _b64:sub(              n        % 64 + 1,               n        % 64 + 1)
+    end
+
+    local encoded = table.concat(result)
+    return encoded:sub(1, #encoded - padding) .. string.rep("=", padding)
+end
+
+-- ── Length-prefix framing helpers ───────────────────────────────────────────
+
+local function recvMessage(client)
+    -- Read 4-byte big-endian uint32 header
+    local hdr = ""
+    while #hdr < 4 do
+        local chunk, err = client:receive(4 - #hdr)
+        if err then return nil, "recv header: " .. tostring(err) end
+        hdr = hdr .. chunk
+    end
+    local b1, b2, b3, b4 = hdr:byte(1, 4)
+    local msgLen = b1 * 16777216 + b2 * 65536 + b3 * 256 + b4
+
+    -- Read exact payload
+    local buf = ""
+    while #buf < msgLen do
+        local chunk, err = client:receive(math.min(4096, msgLen - #buf))
+        if err then return nil, "recv body: " .. tostring(err) end
+        buf = buf .. chunk
+    end
+    return buf, nil
+end
+
+local function sendMessage(client, payload)
+    local len = #payload
+    local hdr = string.char(
+        math.floor(len / 16777216) % 256,
+        math.floor(len /    65536) % 256,
+        math.floor(len /      256) % 256,
+        len % 256
+    )
+    client:send(hdr .. payload)
+end
+
 local log = LrLogger("ClaudeLRBridge")
 log:enable("logfile")
 
@@ -214,20 +270,12 @@ function Server.start()
         local client, cerr = server:accept(1.0)  -- 1 second timeout
         if client then
             LrTasks.startAsyncTask(function()
-                -- Read until newline delimiter
-                local buf = ""
-                while true do
-                    local chunk, rerr = client:receive(1024)
-                    if rerr then break end
-                    if chunk then
-                        buf = buf .. chunk
-                        if buf:find("\n") then break end
-                    end
-                end
-                buf = buf:gsub("\n", "")
-                if #buf > 0 then
-                    local responseStr = handleRequest(buf)
-                    client:send(responseStr .. "\n")
+                local data, err = recvMessage(client)
+                if data and #data > 0 then
+                    local responseStr = handleRequest(data)
+                    sendMessage(client, responseStr)
+                elseif err then
+                    log:error("Read error: " .. err)
                 end
                 client:close()
             end)

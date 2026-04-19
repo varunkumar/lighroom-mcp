@@ -83,7 +83,7 @@ def test_export_preview_mcp_tool_returns_image_content(mock_lr):
     assert len(contents) == 1
     img = contents[0]
     assert isinstance(img, types.ImageContent)
-    assert img.media_type == "image/jpeg"
+    assert img.mimeType == "image/jpeg"
     raw = base64.b64decode(img.data)
     assert raw[:2] == b"\xff\xd8"
 

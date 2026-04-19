@@ -118,6 +118,44 @@ async def list_tools() -> list[types.Tool]:
             description="Check if the Lightroom bridge is connected and running.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        types.Tool(
+            name="lr_export_preview",
+            description=(
+                "Export a JPEG preview of the currently selected photo in Lightroom Classic "
+                "and return it as an image. Claude can see the photo and give visual feedback "
+                "on develop settings, tone, color, composition, etc. "
+                "Call this before and after applying settings to compare results."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "size": {
+                        "type": "integer",
+                        "description": "Long-edge pixel size of the JPEG (default 1500, max 2048)",
+                    }
+                },
+            },
+        ),
+        types.Tool(
+            name="lr_batch_apply_settings",
+            description=(
+                "Apply develop settings to ALL currently selected photos in Lightroom Classic. "
+                "Useful for batch operations like denoising a series of shots, "
+                "applying a consistent grade across a set, etc. "
+                "Uses the same parameter names and ranges as lr_apply_settings."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "settings": {
+                        "type": "object",
+                        "description": "Key-value pairs of Lightroom develop parameters to apply to all selected photos",
+                        "additionalProperties": {"type": "number"},
+                    }
+                },
+                "required": ["settings"],
+            },
+        ),
     ]
 
 
@@ -141,6 +179,26 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             result = {"success": False, "error": "No settings provided"}
         else:
             result = send_to_lightroom({"command": "apply_settings", "settings": settings})
+
+    elif name == "lr_export_preview":
+        size = min(int(arguments.get("size", 1500)), 2048)
+        result = send_to_lightroom({"command": "export_preview", "size": size})
+        if result.get("success") and result.get("data"):
+            return [
+                types.ImageContent(
+                    type="image",
+                    mimeType="image/jpeg",
+                    data=result["data"],
+                )
+            ]
+        return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "lr_batch_apply_settings":
+        settings = arguments.get("settings", {})
+        if not settings:
+            result = {"success": False, "error": "No settings provided"}
+        else:
+            result = send_to_lightroom({"command": "batch_apply_settings", "settings": settings})
 
     else:
         result = {"success": False, "error": f"Unknown tool: {name}"}

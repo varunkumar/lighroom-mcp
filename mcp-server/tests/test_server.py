@@ -7,7 +7,6 @@ import base64
 import os
 import subprocess
 import sys
-import time
 
 import pytest
 
@@ -103,6 +102,7 @@ def test_batch_apply_settings_protocol(mock_lr):
 
 
 def test_batch_apply_settings_mcp_tool(mock_lr):
+    import json
     import server
     from mcp import types
     contents = asyncio.run(server.call_tool(
@@ -111,4 +111,6 @@ def test_batch_apply_settings_mcp_tool(mock_lr):
     ))
     assert len(contents) == 1
     assert isinstance(contents[0], types.TextContent)
-    assert "3" in contents[0].text   # 3 photos applied
+    data = json.loads(contents[0].text)
+    assert data["applied"] == 3
+    assert data["skipped"] == 0

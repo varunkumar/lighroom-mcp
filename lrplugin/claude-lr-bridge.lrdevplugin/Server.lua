@@ -211,6 +211,33 @@ local function resetAllSettings()
     return true, "All develop settings reset"
 end
 
+local function exportPreview(size)
+    local photo = getCurrentPhoto()
+    if not photo then return nil, "No photo selected" end
+
+    local thumbSize = math.min(tonumber(size) or 1500, 2048)
+    local jpegData  = nil
+    local done      = false
+
+    -- requestJpegThumbnail is callback-based; poll until the callback fires
+    photo:requestJpegThumbnail(thumbSize, thumbSize, function(jpeg, _reason)
+        jpegData = jpeg
+        done     = true
+    end)
+
+    local elapsed = 0
+    while not done and elapsed < 5.0 do
+        LrTasks.sleep(0.05)
+        elapsed = elapsed + 0.05
+    end
+
+    if not jpegData then
+        return nil, "Thumbnail timed out or unavailable"
+    end
+
+    return base64Encode(jpegData), nil
+end
+
 local function handleRequest(data)
     local ok, req = pcall(LrJSON.decode, data)
     if not ok or type(req) ~= "table" then
@@ -242,6 +269,14 @@ local function handleRequest(data)
     elseif cmd == "reset" then
         local s, msg = resetAllSettings()
         response = { success = s, message = msg }
+
+    elseif cmd == "export_preview" then
+        local b64, err = exportPreview(req.size)
+        if b64 then
+            response = { success = true, data = b64 }
+        else
+            response = { success = false, error = err }
+        end
 
     else
         response = { success = false, error = "Unknown command: " .. tostring(cmd) }

@@ -1,18 +1,24 @@
 # Claude Lightroom Bridge
 
-Control Lightroom Classic develop settings via Claude Desktop using MCP.
+Control Lightroom Classic develop settings via Claude Desktop using MCP. Describe edits in plain English — Claude figures out the parameters and applies them instantly. With the preview tool, Claude can **see** your photo and give visual feedback on tone, color, and composition.
 
 ---
 
 ## How it works
 
 ```
-You (Claude Desktop) → MCP Server (Python) → TCP Socket → Lua Plugin → LrDevelopController
+You (Claude Desktop) → MCP Server (Python) → TCP Socket (port 54321) → Lua Plugin → LrDevelopController
 ```
 
-The Lua plugin runs a tiny TCP server inside Lightroom. The Python MCP server
-exposes tools that Claude Desktop can call. You describe edits in plain English,
-Claude figures out the right parameters, and the plugin applies them instantly.
+The Lua plugin runs a TCP server inside Lightroom. The Python MCP server exposes tools that Claude Desktop calls. Both speak a length-prefixed JSON protocol over localhost — no internet connection required.
+
+---
+
+## Requirements
+
+- **Lightroom Classic** (any recent version)
+- **Python 3.9+**
+- **Claude Desktop** with an active Claude subscription
 
 ---
 
@@ -23,27 +29,48 @@ Claude figures out the right parameters, and the plugin applies them instantly.
 1. Open Lightroom Classic
 2. Go to **File → Plug-in Manager**
 3. Click **Add** at the bottom left
-4. Navigate to and select the `claude-lr-bridge.lrdevplugin` folder
+4. Navigate to `lrplugin/` in this repo and select the `claude-lr-bridge.lrdevplugin` folder
 5. Click **Add Plug-in**
-6. Make sure the plugin status shows **Enabled**
+6. Confirm the plugin status shows **Enabled**
 
-The plugin auto-starts its socket server when Lightroom launches.
-You can also start/stop it manually via **Library → Plug-in Extras → Start/Stop Claude Bridge Server**.
+The plugin auto-starts its TCP server on port 54321 whenever Lightroom opens.
+
+> **Manual control:** You can start/stop the server any time via **Library → Plug-in Extras → Start Claude Bridge Server** or **Stop Claude Bridge Server**.
+
+---
 
 ### Step 2 — Install the MCP server
 
+Open a terminal and run:
+
 ```bash
-cd mcp-server
+cd /path/to/lightroom-mcp/mcp-server
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Note the full path to `server.py`, e.g. `/Users/yourname/lightroom-mcp/mcp-server/server.py`
+Verify it works:
+
+```bash
+python3 server.py
+# Should print nothing and wait — that's correct. Ctrl-C to stop.
+```
+
+Note the **full absolute path** to both `venv/bin/python3` and `server.py`. You'll need these in the next step.
+
+---
 
 ### Step 3 — Configure Claude Desktop
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Open the Claude Desktop config file:
+
+| Platform | Path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+Add the `lightroom` server entry. Replace the paths with your actual paths:
 
 ```json
 {
@@ -56,76 +83,202 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Use the full path to the venv Python, not just `python3`, so Claude Desktop
-finds the right interpreter with mcp installed.
+> **Important:** Use the full path to the **venv** Python (not the system `python3`). The venv Python has `mcp` installed; the system one doesn't.
 
-Restart Claude Desktop after saving the config.
-
----
-
-## Usage examples
-
-Once set up, just talk to Claude Desktop naturally:
-
-- **"Make this photo look like golden hour"**
-  → Claude warms the temperature, lifts shadows, reduces highlights
-
-- **"This looks too flat, add some punch"**
-  → Claude boosts contrast, clarity, and dehaze
-
-- **"Reduce the noise, this was shot at high ISO"**
-  → Claude adjusts luminance smoothing and color noise reduction
-
-- **"What are the current develop settings?"**
-  → Claude reads and reports all slider values
-
-- **"Reset everything and start fresh"**
-  → Claude resets all develop settings
+**Restart Claude Desktop** after saving. The MCP tools load at startup.
 
 ---
 
-## Available MCP tools
+### Step 4 — Verify the connection
+
+In Claude Desktop, type:
+
+> "Ping Lightroom"
+
+Claude will call `lr_ping`. If the plugin is running you'll see:
+
+> ✓ Connected. Claude LR Bridge running on port 54321.
+
+If it fails, see [Troubleshooting](#troubleshooting).
+
+---
+
+## Using from Claude Desktop
+
+Once set up, talk to Claude naturally. You don't need to know any parameter names — Claude translates your intent into slider values.
+
+### Basic editing
+
+```
+"Show me the current photo"
+→ Claude calls lr_export_preview and displays the JPEG inline
+
+"This looks underexposed, fix it"
+→ Claude calls lr_apply_settings with Exposure +1.2
+
+"Add some warmth and lift the shadows"
+→ Temperature +800, Shadows +25
+
+"It's too green — reduce the green saturation and shift the hue"
+→ SaturationAdjustmentGreen -40, HueAdjustmentGreen +15
+
+"The sky looks blown out"
+→ Highlights -60, Whites -20, possibly Dehaze +15
+
+"Make this look like a film photo"
+→ Contrast +20, Fade (Blacks +15), GrainAmount 30, GrainSize 40
+```
+
+### Visual feedback workflow
+
+The most powerful workflow: ask Claude to look at the photo, then iterate.
+
+```
+"Show me the photo"                          → lr_export_preview
+"What do you see? Any problems with the tone?"
+"OK, fix the exposure and show me again"     → lr_apply_settings, lr_export_preview
+"Better. The skin tones look a bit magenta"
+"Adjust the red/magenta hue and show me"     → lr_apply_settings, lr_export_preview
+```
+
+### Batch editing
+
+Select multiple photos in Lightroom, then:
+
+```
+"Denoise all selected photos"
+→ lr_batch_apply_settings with LuminanceSmoothing 60, ColorNoiseReduction 50
+
+"Apply the same exposure correction to all selected shots"
+→ lr_batch_apply_settings with Exposure +0.8
+
+"Give all these photos a consistent warm grade"
+→ lr_batch_apply_settings with Temperature 6800, Shadows +15, Highlights -20
+```
+
+### Other commands
+
+```
+"What are the current develop settings?"     → lr_get_settings (lists all values)
+"Run auto tone"                              → lr_auto_tone
+"Reset everything and start from scratch"    → lr_reset
+```
+
+---
+
+## Available tools
 
 | Tool | What it does |
 |---|---|
-| `lr_apply_settings` | Apply any develop parameter values |
-| `lr_get_settings` | Read current settings + metadata |
-| `lr_auto_tone` | Run Lightroom's auto tone |
-| `lr_reset` | Reset all develop settings |
 | `lr_ping` | Check the connection is working |
+| `lr_get_settings` | Read all current develop slider values + filename + rating |
+| `lr_apply_settings` | Apply develop parameters to the selected photo |
+| `lr_export_preview` | Export a JPEG preview — Claude sees the photo inline |
+| `lr_batch_apply_settings` | Apply develop parameters to **all** currently selected photos |
+| `lr_auto_tone` | Run Lightroom's Auto Tone |
+| `lr_reset` | Reset all develop settings to defaults |
 
 ---
 
-## Develop parameters reference
+## Develop parameter reference
 
-**Tone:** Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Clarity, Dehaze
+**Tone**
 
-**Color:** Vibrance, Saturation, Temperature, Tint
+| Parameter | Range |
+|---|---|
+| Exposure | -5 to 5 |
+| Contrast | -100 to 100 |
+| Highlights | -100 to 100 |
+| Shadows | -100 to 100 |
+| Whites | -100 to 100 |
+| Blacks | -100 to 100 |
+| Clarity | -100 to 100 |
+| Dehaze | -100 to 100 |
 
-**HSL (each for Red/Orange/Yellow/Green/Aqua/Blue/Purple/Magenta):**
-HueAdjustment*, SaturationAdjustment*, LuminanceAdjustment*
+**Color**
 
-**Detail:** Sharpness, SharpenRadius, SharpenDetail, SharpenEdgeMasking,
-LuminanceSmoothing, ColorNoiseReduction
+| Parameter | Range |
+|---|---|
+| Temperature | 2000–50000 K |
+| Tint | -150 to 150 |
+| Vibrance | -100 to 100 |
+| Saturation | -100 to 100 |
 
-**Effects:** GrainAmount, GrainSize, PostCropVignetteAmount, PostCropVignetteMidpoint
+**HSL** — append Red / Orange / Yellow / Green / Aqua / Blue / Purple / Magenta
 
-**Transform:** PerspectiveVertical, PerspectiveHorizontal, PerspectiveRotate
+| Parameter | Range |
+|---|---|
+| HueAdjustment* | -100 to 100 |
+| SaturationAdjustment* | -100 to 100 |
+| LuminanceAdjustment* | -100 to 100 |
+
+**Detail**
+
+| Parameter | Range |
+|---|---|
+| Sharpness | 0–150 |
+| SharpenRadius | 0.5–3.0 |
+| SharpenDetail | 0–100 |
+| SharpenEdgeMasking | 0–100 |
+| LuminanceSmoothing | 0–100 |
+| ColorNoiseReduction | 0–100 |
+
+**Effects**
+
+| Parameter | Range |
+|---|---|
+| GrainAmount | 0–100 |
+| GrainSize | 0–100 |
+| PostCropVignetteAmount | -100 to 100 |
+| PostCropVignetteMidpoint | 0–100 |
+
+**Transform**
+
+| Parameter | Range |
+|---|---|
+| PerspectiveVertical | -100 to 100 |
+| PerspectiveHorizontal | -100 to 100 |
+| PerspectiveRotate | -10 to 10 |
+
+Parameter names are **case-insensitive** — Claude can pass `exposure` or `Exposure` and the plugin normalises it.
 
 ---
 
 ## Troubleshooting
 
-**"Cannot connect to Lightroom"**
-- Make sure Lightroom Classic is open
-- Check the plugin is enabled in Plug-in Manager
-- Try Library → Plug-in Extras → Start Claude Bridge Server manually
+**"Cannot connect to Lightroom" / ping fails**
+- Confirm Lightroom Classic is open (not Lightroom CC)
+- Check the plugin is **Enabled** in File → Plug-in Manager
+- Try starting the server manually: Library → Plug-in Extras → Start Claude Bridge Server
+- Check no firewall is blocking localhost port 54321
 
-**Tools not appearing in Claude Desktop**
-- Check the paths in claude_desktop_config.json are absolute paths
-- Make sure you restarted Claude Desktop after editing the config
-- Run `python3 server.py` directly in terminal to check for import errors
+**Lightroom tools not appearing in Claude Desktop**
+- Confirm the paths in `claude_desktop_config.json` are absolute and correct
+- Confirm you're pointing to the **venv** Python, not the system Python
+- Restart Claude Desktop (not just reload — fully quit and reopen)
+- Open the Claude Desktop developer console (if available) to check for MCP connection errors
+- Test the server directly: `cd mcp-server && venv/bin/python3 server.py` — should start silently
 
-**Edits not applying**
-- Make sure you are in the Develop module, or have a photo selected in Library
-- The plugin switches to Develop automatically but sometimes needs a moment
+**Edits not applying to the photo**
+- A photo must be selected in Lightroom
+- The plugin auto-switches to the Develop module but may need a moment
+- If settings apply then revert, check Lightroom's History panel for conflicts
+
+**`lr_export_preview` returns an error instead of an image**
+- The thumbnail request can time out if Lightroom is busy building previews
+- Try again after Lightroom finishes its initial preview render (progress bar in Library)
+
+---
+
+## Development
+
+To test the MCP server without Lightroom open, use the included mock server:
+
+```bash
+cd mcp-server
+pip install -r requirements-dev.txt   # Pillow + pytest
+python3 mock_lr.py                    # starts on localhost:54321
+pytest tests/ -v                      # run all 9 tests
+```
+
+The mock simulates all commands, generates color-shifting JPEG previews based on Temperature, and tracks state across calls — so you can test the full Python layer without Lightroom installed.

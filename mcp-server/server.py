@@ -23,32 +23,31 @@ app = Server("lightroom-bridge")
 def send_to_lightroom(command: dict) -> dict:
     """Send a length-prefixed JSON command to the Lightroom plugin."""
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(TIMEOUT)
-        sock.connect((LR_HOST, LR_PORT))
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(TIMEOUT)
+            sock.connect((LR_HOST, LR_PORT))
 
-        payload = json.dumps(command).encode("utf-8")
-        sock.sendall(struct.pack(">I", len(payload)) + payload)
+            payload = json.dumps(command).encode("utf-8")
+            sock.sendall(struct.pack(">I", len(payload)) + payload)
 
-        # Read 4-byte length header
-        hdr = b""
-        while len(hdr) < 4:
-            chunk = sock.recv(4 - len(hdr))
-            if not chunk:
-                raise ConnectionError("Connection closed reading header")
-            hdr += chunk
-        (msg_len,) = struct.unpack(">I", hdr)
+            # Read 4-byte length header
+            hdr = b""
+            while len(hdr) < 4:
+                chunk = sock.recv(4 - len(hdr))
+                if not chunk:
+                    raise ConnectionError("Connection closed reading header")
+                hdr += chunk
+            (msg_len,) = struct.unpack(">I", hdr)
 
-        # Read exact payload
-        buf = b""
-        while len(buf) < msg_len:
-            chunk = sock.recv(min(4096, msg_len - len(buf)))
-            if not chunk:
-                raise ConnectionError("Connection closed reading payload")
-            buf += chunk
+            # Read exact payload
+            buf = b""
+            while len(buf) < msg_len:
+                chunk = sock.recv(min(4096, msg_len - len(buf)))
+                if not chunk:
+                    raise ConnectionError("Connection closed reading payload")
+                buf += chunk
 
-        sock.close()
-        return json.loads(buf.decode("utf-8"))
+            return json.loads(buf.decode("utf-8"))
     except ConnectionRefusedError:
         return {
             "success": False,

@@ -7,10 +7,10 @@ Control Lightroom Classic develop settings via Claude Desktop using MCP. Describ
 ## How it works
 
 ```
-You (Claude Desktop) → MCP Server (Python) → TCP Socket (port 54321) → Lua Plugin → LrDevelopController
+You (Claude Desktop) → MCP Server (Python/stdio) → File IPC (/tmp) → Lua Plugin → LrDevelopController
 ```
 
-The Lua plugin runs a TCP server inside Lightroom. The Python MCP server exposes tools that Claude Desktop calls. Both speak a length-prefixed JSON protocol over localhost — no internet connection required.
+The Python MCP server communicates with Claude Desktop over stdio. It sends commands to the Lightroom plugin by writing JSON to `/tmp/lr_mcp_req.json` and polling for a response at `/tmp/lr_mcp_res.json`. The Lua plugin running inside Lightroom polls that file every 50ms, processes commands via `LrDevelopController`, and writes results back. No network connection or open ports required.
 
 ---
 
@@ -97,7 +97,7 @@ In Claude Desktop, type:
 
 Claude will call `lr_ping`. If the plugin is running you'll see:
 
-> ✓ Connected. Claude LR Bridge running on port 54321.
+> ✓ Connected. Claude LR Bridge running.
 
 If it fails, see [Troubleshooting](#troubleshooting).
 
@@ -177,6 +177,10 @@ Select multiple photos in Lightroom, then:
 | `lr_batch_apply_settings` | Apply develop parameters to **all** currently selected photos |
 | `lr_auto_tone`            | Run Lightroom's Auto Tone                                     |
 | `lr_reset`                | Reset all develop settings to defaults                        |
+| `lr_crop`                 | Crop and/or straighten the selected photo                     |
+| `lr_add_mask`             | Add an AI or manual mask (subject, sky, gradient, brush…)     |
+| `lr_lens_blur`            | Apply AI Lens Blur with bokeh shape control                   |
+| `lr_enhance`              | Run AI Denoise, Super Resolution, or Raw Details              |
 
 ---
 
@@ -239,6 +243,48 @@ Select multiple photos in Lightroom, then:
 | PerspectiveVertical   | -100 to 100 |
 | PerspectiveHorizontal | -100 to 100 |
 | PerspectiveRotate     | -10 to 10   |
+| PerspectiveScale      | 50–150      |
+| PerspectiveAspect     | -100 to 100 |
+| PerspectiveX/Y        | -100 to 100 |
+
+**Color Grading**
+
+| Parameter              | Range       |
+| ---------------------- | ----------- |
+| ColorGradeBlending     | 0–100       |
+| ColorGradeGlobalHue    | 0–360       |
+| ColorGradeGlobalLum    | -100 to 100 |
+| ColorGradeGlobalSat    | 0–100       |
+| ColorGradeMidtoneHue   | 0–360       |
+| ColorGradeMidtoneLum   | -100 to 100 |
+| ColorGradeMidtoneSat   | 0–100       |
+| ColorGradeHighlightLum | -100 to 100 |
+| ColorGradeShadowLum    | -100 to 100 |
+
+**B&W Mix** — append Red / Orange / Yellow / Green / Aqua / Blue / Purple / Magenta
+
+| Parameter   | Range       |
+| ----------- | ----------- |
+| GrayMixer\* | -100 to 100 |
+
+**Split Toning**
+
+| Parameter                      | Range       |
+| ------------------------------ | ----------- |
+| SplitToningBalance             | -100 to 100 |
+| SplitToningHighlightHue        | 0–360       |
+| SplitToningHighlightSaturation | 0–100       |
+| SplitToningShadowHue           | 0–360       |
+| SplitToningShadowSaturation    | 0–100       |
+
+**Defringe**
+
+| Parameter              | Range |
+| ---------------------- | ----- |
+| DefringeGreenAmount    | 0–100 |
+| DefringeGreenHueHi/Lo  | 0–100 |
+| DefringePurpleAmount   | 0–100 |
+| DefringePurpleHueHi/Lo | 0–100 |
 
 Parameter names are **case-insensitive** — Claude can pass `exposure` or `Exposure` and the plugin normalises it.
 
@@ -250,8 +296,7 @@ Parameter names are **case-insensitive** — Claude can pass `exposure` or `Expo
 
 - Confirm Lightroom Classic is open (not Lightroom CC)
 - Check the plugin is **Enabled** in File → Plug-in Manager
-- Try starting the server manually: **File → Plug-in Extras → Start Claude Bridge Server** (Library module only — press `G`)
-- Check no firewall is blocking localhost port 54321
+- Try starting it manually: **File → Plug-in Extras → Start Claude LR Bridge** (available in any module)
 
 **Lightroom tools not appearing in Claude Desktop**
 
@@ -281,7 +326,7 @@ To test the MCP server without Lightroom open, use the included mock server:
 ```bash
 cd mcp-server
 pip install -r requirements-dev.txt   # Pillow + pytest
-python3 mock_lr.py                    # starts on localhost:54321
+python3 mock_lr.py                    # polls /tmp/lr_mcp_req.json (file IPC)
 pytest tests/ -v                      # run all 9 tests
 ```
 

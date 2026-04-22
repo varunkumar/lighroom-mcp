@@ -18,7 +18,7 @@ The Python MCP server communicates with Claude Desktop over stdio. It sends comm
 
 - **Lightroom Classic** (any recent version)
 - **Python 3.9+**
-- **Claude Desktop** with an active Claude subscription
+- **Claude Desktop** with an active Claude subscription/any tool that supports MCP
 
 ---
 

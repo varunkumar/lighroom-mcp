@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
 """
-Mock Lightroom TCP server for testing without Lightroom open.
+Mock Lightroom file-IPC server for testing without Lightroom open.
 Dev/test only — never deployed or referenced by Claude Desktop.
 
+Polls /tmp/lr_mcp_req.json every 50ms and writes /tmp/lr_mcp_res.json.
+
 Usage:
-    python3 mock_lr.py              # port 54321
-    python3 mock_lr.py --port 54322
+    python3 mock_lr.py
 """
 
-import argparse
 import base64
 import io
 import json
-import socket
-import struct
+import os
 import threading
+import time
 
 try:
     from PIL import Image
     HAS_PILLOW = True
 except ImportError:
     HAS_PILLOW = False
+
+REQ_FILE = "/tmp/lr_mcp_req.json"
+RES_FILE = "/tmp/lr_mcp_res.json"
+POLL = 0.05
 
 _DEFAULT_SETTINGS = {
     "Exposure": 0, "Contrast": 0, "Highlights": 0, "Shadows": 0,
@@ -73,28 +77,6 @@ def _make_jpeg(settings: dict, size: int) -> str:
         b"\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xf5\x00\xff\xd9"
     )
     return base64.b64encode(minimal).decode()
-
-
-def _recv(sock: socket.socket) -> dict:
-    hdr = b""
-    while len(hdr) < 4:
-        chunk = sock.recv(4 - len(hdr))
-        if not chunk:
-            raise ConnectionError("closed")
-        hdr += chunk
-    (length,) = struct.unpack(">I", hdr)
-    buf = b""
-    while len(buf) < length:
-        chunk = sock.recv(min(4096, length - len(buf)))
-        if not chunk:
-            raise ConnectionError("closed")
-        buf += chunk
-    return json.loads(buf.decode())
-
-
-def _send(sock: socket.socket, data: dict) -> None:
-    payload = json.dumps(data).encode()
-    sock.sendall(struct.pack(">I", len(payload)) + payload)
 
 
 class _State:
@@ -153,37 +135,43 @@ class _State:
             return {"success": False, "error": f"Unknown command: {cmd}"}
 
 
-def _handle_client(conn: socket.socket, state: _State) -> None:
-    try:
-        req = _recv(conn)
-        _send(conn, state.handle(req))
-    except Exception as exc:
-        try:
-            _send(conn, {"success": False, "error": str(exc)})
-        except Exception:
-            pass
-    finally:
-        conn.close()
-
-
-def serve(port: int = 54321) -> None:
+def serve() -> None:
     state = _State()
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("localhost", port))
-    srv.listen(5)
-    print(f"Mock LR Bridge listening on localhost:{port}", flush=True)
+    # Clean up stale files
+    for f in (REQ_FILE, RES_FILE):
+        if os.path.exists(f):
+            os.remove(f)
+    print("Mock LR Bridge running (file IPC mode)", flush=True)
+    print(f"  Watching: {REQ_FILE}", flush=True)
+    print(f"  Writing:  {RES_FILE}", flush=True)
     try:
         while True:
-            conn, _ = srv.accept()
-            threading.Thread(target=_handle_client, args=(conn, state), daemon=True).start()
+            if os.path.exists(REQ_FILE):
+                try:
+                    with open(REQ_FILE, "r") as f:
+                        req = json.load(f)
+                    os.remove(REQ_FILE)
+                    resp = state.handle(req)
+                    tmp = RES_FILE + ".tmp"
+                    with open(tmp, "w") as f:
+                        json.dump(resp, f)
+                    os.replace(tmp, RES_FILE)
+                    print(
+                        f"  {req.get('command')} → {resp.get('success')}", flush=True)
+                except Exception as exc:
+                    # Write error response so server.py doesn't time out
+                    tmp = RES_FILE + ".tmp"
+                    with open(tmp, "w") as f:
+                        json.dump({"success": False, "error": str(exc)}, f)
+                    os.replace(tmp, RES_FILE)
+            time.sleep(POLL)
     except KeyboardInterrupt:
         pass
     finally:
-        srv.close()
+        for f in (REQ_FILE, RES_FILE):
+            if os.path.exists(f):
+                os.remove(f)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mock Lightroom TCP server (dev/test only)")
-    parser.add_argument("--port", type=int, default=54321)
-    serve(parser.parse_args().port)
+    serve()

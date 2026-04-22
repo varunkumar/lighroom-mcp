@@ -3,3 +3,4 @@ mcp-server/venv/
 **/__pycache__/
 **/*.pyc
 **/*.pyo
+.DS_STORE

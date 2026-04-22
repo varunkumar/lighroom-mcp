@@ -33,9 +33,9 @@ The Lua plugin runs a TCP server inside Lightroom. The Python MCP server exposes
 5. Click **Add Plug-in**
 6. Confirm the plugin status shows **Enabled**
 
-The plugin auto-starts its TCP server on port 54321 whenever Lightroom opens.
+The plugin auto-starts the bridge whenever Lightroom opens — **you do not need to start it manually each time**. The `LrInitPlugin` hook fires on every Lightroom launch and begins the file-polling loop automatically.
 
-> **Manual control:** You can start/stop the server any time via **Library → Plug-in Extras → Start Claude Bridge Server** or **Stop Claude Bridge Server**.
+> **Manual control:** If `lr_ping` fails after a fresh Lightroom start (e.g. after reloading the plugin mid-session from Plug-in Manager), you can kick it manually via **File → Plug-in Extras → Start Claude LR Bridge**. This is a fallback — under normal operation Lightroom starts it for you.
 
 ---
 
@@ -65,10 +65,10 @@ Note the **full absolute path** to both `venv/bin/python3` and `server.py`. You'
 
 Open the Claude Desktop config file:
 
-| Platform | Path |
-|---|---|
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Platform | Path                                                              |
+| -------- | ----------------------------------------------------------------- |
+| macOS    | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows  | `%APPDATA%\Claude\claude_desktop_config.json`                     |
 
 Add the `lightroom` server entry. Replace the paths with your actual paths:
 
@@ -168,15 +168,15 @@ Select multiple photos in Lightroom, then:
 
 ## Available tools
 
-| Tool | What it does |
-|---|---|
-| `lr_ping` | Check the connection is working |
-| `lr_get_settings` | Read all current develop slider values + filename + rating |
-| `lr_apply_settings` | Apply develop parameters to the selected photo |
-| `lr_export_preview` | Export a JPEG preview — Claude sees the photo inline |
+| Tool                      | What it does                                                  |
+| ------------------------- | ------------------------------------------------------------- |
+| `lr_ping`                 | Check the connection is working                               |
+| `lr_get_settings`         | Read all current develop slider values + filename + rating    |
+| `lr_apply_settings`       | Apply develop parameters to the selected photo                |
+| `lr_export_preview`       | Export a JPEG preview — Claude sees the photo inline          |
 | `lr_batch_apply_settings` | Apply develop parameters to **all** currently selected photos |
-| `lr_auto_tone` | Run Lightroom's Auto Tone |
-| `lr_reset` | Reset all develop settings to defaults |
+| `lr_auto_tone`            | Run Lightroom's Auto Tone                                     |
+| `lr_reset`                | Reset all develop settings to defaults                        |
 
 ---
 
@@ -184,61 +184,61 @@ Select multiple photos in Lightroom, then:
 
 **Tone**
 
-| Parameter | Range |
-|---|---|
-| Exposure | -5 to 5 |
-| Contrast | -100 to 100 |
+| Parameter  | Range       |
+| ---------- | ----------- |
+| Exposure   | -5 to 5     |
+| Contrast   | -100 to 100 |
 | Highlights | -100 to 100 |
-| Shadows | -100 to 100 |
-| Whites | -100 to 100 |
-| Blacks | -100 to 100 |
-| Clarity | -100 to 100 |
-| Dehaze | -100 to 100 |
+| Shadows    | -100 to 100 |
+| Whites     | -100 to 100 |
+| Blacks     | -100 to 100 |
+| Clarity    | -100 to 100 |
+| Dehaze     | -100 to 100 |
 
 **Color**
 
-| Parameter | Range |
-|---|---|
+| Parameter   | Range        |
+| ----------- | ------------ |
 | Temperature | 2000–50000 K |
-| Tint | -150 to 150 |
-| Vibrance | -100 to 100 |
-| Saturation | -100 to 100 |
+| Tint        | -150 to 150  |
+| Vibrance    | -100 to 100  |
+| Saturation  | -100 to 100  |
 
 **HSL** — append Red / Orange / Yellow / Green / Aqua / Blue / Purple / Magenta
 
-| Parameter | Range |
-|---|---|
-| HueAdjustment* | -100 to 100 |
-| SaturationAdjustment* | -100 to 100 |
-| LuminanceAdjustment* | -100 to 100 |
+| Parameter              | Range       |
+| ---------------------- | ----------- |
+| HueAdjustment\*        | -100 to 100 |
+| SaturationAdjustment\* | -100 to 100 |
+| LuminanceAdjustment\*  | -100 to 100 |
 
 **Detail**
 
-| Parameter | Range |
-|---|---|
-| Sharpness | 0–150 |
-| SharpenRadius | 0.5–3.0 |
-| SharpenDetail | 0–100 |
-| SharpenEdgeMasking | 0–100 |
-| LuminanceSmoothing | 0–100 |
-| ColorNoiseReduction | 0–100 |
+| Parameter           | Range   |
+| ------------------- | ------- |
+| Sharpness           | 0–150   |
+| SharpenRadius       | 0.5–3.0 |
+| SharpenDetail       | 0–100   |
+| SharpenEdgeMasking  | 0–100   |
+| LuminanceSmoothing  | 0–100   |
+| ColorNoiseReduction | 0–100   |
 
 **Effects**
 
-| Parameter | Range |
-|---|---|
-| GrainAmount | 0–100 |
-| GrainSize | 0–100 |
-| PostCropVignetteAmount | -100 to 100 |
-| PostCropVignetteMidpoint | 0–100 |
+| Parameter                | Range       |
+| ------------------------ | ----------- |
+| GrainAmount              | 0–100       |
+| GrainSize                | 0–100       |
+| PostCropVignetteAmount   | -100 to 100 |
+| PostCropVignetteMidpoint | 0–100       |
 
 **Transform**
 
-| Parameter | Range |
-|---|---|
-| PerspectiveVertical | -100 to 100 |
+| Parameter             | Range       |
+| --------------------- | ----------- |
+| PerspectiveVertical   | -100 to 100 |
 | PerspectiveHorizontal | -100 to 100 |
-| PerspectiveRotate | -10 to 10 |
+| PerspectiveRotate     | -10 to 10   |
 
 Parameter names are **case-insensitive** — Claude can pass `exposure` or `Exposure` and the plugin normalises it.
 
@@ -247,12 +247,14 @@ Parameter names are **case-insensitive** — Claude can pass `exposure` or `Expo
 ## Troubleshooting
 
 **"Cannot connect to Lightroom" / ping fails**
+
 - Confirm Lightroom Classic is open (not Lightroom CC)
 - Check the plugin is **Enabled** in File → Plug-in Manager
-- Try starting the server manually: Library → Plug-in Extras → Start Claude Bridge Server
+- Try starting the server manually: **File → Plug-in Extras → Start Claude Bridge Server** (Library module only — press `G`)
 - Check no firewall is blocking localhost port 54321
 
 **Lightroom tools not appearing in Claude Desktop**
+
 - Confirm the paths in `claude_desktop_config.json` are absolute and correct
 - Confirm you're pointing to the **venv** Python, not the system Python
 - Restart Claude Desktop (not just reload — fully quit and reopen)
@@ -260,11 +262,13 @@ Parameter names are **case-insensitive** — Claude can pass `exposure` or `Expo
 - Test the server directly: `cd mcp-server && venv/bin/python3 server.py` — should start silently
 
 **Edits not applying to the photo**
+
 - A photo must be selected in Lightroom
 - The plugin auto-switches to the Develop module but may need a moment
 - If settings apply then revert, check Lightroom's History panel for conflicts
 
 **`lr_export_preview` returns an error instead of an image**
+
 - The thumbnail request can time out if Lightroom is busy building previews
 - Try again after Lightroom finishes its initial preview render (progress bar in Library)
 
@@ -282,3 +286,9 @@ pytest tests/ -v                      # run all 9 tests
 ```
 
 The mock simulates all commands, generates color-shifting JPEG previews based on Temperature, and tracks state across calls — so you can test the full Python layer without Lightroom installed.
+
+---
+
+## Reference
+
+- [Lightroom Classic SDK Guide](docs/Lightroom%20Classic%20SDK%20Guide.pdf) — official Adobe SDK documentation covering all `LrDevelopController` APIs, plugin lifecycle, and Lua sandbox constraints.

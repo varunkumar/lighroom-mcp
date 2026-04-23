@@ -245,17 +245,10 @@ async def list_tools() -> list[types.Tool]:
             name="lr_add_mask",
             description=(
                 "Add a mask to the selected photo in Lightroom Classic. "
-                "maskType options: "
-                "'subject' (AI select subject), "
-                "'sky' (AI select sky), "
-                "'background' (AI select background), "
-                "'person' (AI select people), "
-                "'objects' (AI select objects), "
-                "'gradient' (linear gradient), "
-                "'radialGradient' (radial/elliptical gradient), "
-                "'brush' (manual brush), "
-                "'luminance' (luminance range), "
-                "'colorRange' (color range)."
+                "AI selection types (use subject AI): "
+                "'subject', 'sky', 'background', 'objects', 'people', 'landscape'. "
+                "Range mask types: 'luminance', 'color', 'depth'. "
+                "Manual types: 'gradient' (linear), 'radialGradient' (elliptical), 'brush'."
             ),
             inputSchema={
                 "type": "object",
@@ -263,8 +256,9 @@ async def list_tools() -> list[types.Tool]:
                     "maskType": {
                         "type": "string",
                         "description": "Type of mask to create",
-                        "enum": ["subject", "sky", "background", "person", "objects",
-                                 "gradient", "radialGradient", "brush", "luminance", "colorRange"],
+                        "enum": ["subject", "sky", "background", "objects", "people", "landscape",
+                                 "luminance", "color", "depth",
+                                 "gradient", "radialGradient", "brush"],
                     },
                     "params": {
                         "type": "object",

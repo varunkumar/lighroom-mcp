@@ -411,28 +411,41 @@ local function cropPhoto(params)
     return true, "Crop applied: " .. table.concat(applied, ", ")
 end
 
--- Valid mask types supported by LrDevelopController.createNewMask
-local MASK_TYPES = {
+-- AI selection subtypes map to maskType="aiSelection" + maskSubType
+-- Range mask subtypes map to maskType="rangeMask" + maskSubType
+local AI_SUBTYPES = {
     subject=true, sky=true, background=true,
-    person=true, objects=true,
-    gradient=true, radialGradient=true,
-    brush=true, luminance=true, colorRange=true,
+    objects=true, people=true, landscape=true,
+}
+local RANGE_SUBTYPES = {
+    luminance=true, color=true, depth=true,
+}
+-- Direct maskType values (no subtype needed)
+local DIRECT_MASK_TYPES = {
+    gradient=true, radialGradient=true, brush=true,
 }
 
 local function addMask(maskType, maskParams)
-    if not MASK_TYPES[maskType] then
-        local valid = {}
-        for k in pairs(MASK_TYPES) do valid[#valid+1] = k end
-        table.sort(valid)
+    local args = {}
+
+    if AI_SUBTYPES[maskType] then
+        args.maskType    = "aiSelection"
+        args.maskSubType = maskType
+    elseif RANGE_SUBTYPES[maskType] then
+        args.maskType    = "rangeMask"
+        args.maskSubType = maskType
+    elseif DIRECT_MASK_TYPES[maskType] then
+        args.maskType = maskType
+    else
         return false, "Unknown mask type '" .. tostring(maskType) ..
-            "'. Valid types: " .. table.concat(valid, ", ")
+            "'. Valid: subject, sky, background, objects, people, landscape, " ..
+            "luminance, color, depth, gradient, radialGradient, brush"
     end
 
-    local args = { maskType = maskType }
     -- Pass through any extra params (e.g. angle, midpoint, feather for gradients)
     if type(maskParams) == "table" then
         for k, v in pairs(maskParams) do
-            if k ~= "maskType" then args[k] = v end
+            if k ~= "maskType" and k ~= "maskSubType" then args[k] = v end
         end
     end
 

@@ -10,9 +10,10 @@ local LrDevelopController = import "LrDevelopController"
 local LrApplication       = import "LrApplication"
 local LrLogger            = import "LrLogger"
 
-local REQ_FILE  = "/tmp/lr_mcp_req.json"
-local RES_FILE  = "/tmp/lr_mcp_res.json"
+local REQ_FILE      = "/tmp/lr_mcp_req.json"
+local RES_FILE      = "/tmp/lr_mcp_res.json"
 local POLL_INTERVAL = 0.05  -- seconds
+local VERSION       = "1.4.2"  -- keep in sync with Info.lua VERSION
 
 -- ── Bundled JSON encoder/decoder (no LrJSON dependency) ─────────────────────
 local function jsonEncodeValue(val)
@@ -164,6 +165,11 @@ log:enable("logfile")
 
 Server = {}
 Server._running = false
+-- _clrb_gen is a persistent global (not inside Server{}) so it survives
+-- each re-execution of this file via require "Server". This ensures the
+-- generation counter actually evicts old polling tasks even when require
+-- creates a fresh Server table.
+_clrb_gen = (_clrb_gen or 0)
 
 -- All develop parameters supported by LrDevelopController
 local DEVELOP_PARAMS = {
@@ -234,6 +240,21 @@ local function buildParamIndex()
 end
 local PARAM_INDEX = buildParamIndex()
 
+-- Local adjustment parameters settable on a mask via LrDevelopController.setValue("local_*")
+local LOCAL_PARAMS = {
+    "Exposure", "Contrast", "Highlights", "Shadows", "Whites", "Blacks",
+    "Clarity", "Texture", "Dehaze", "Vibrance", "Saturation",
+    "Temperature", "Tint",
+    "Sharpness", "LuminanceNoise", "ColorNoise", "MoireFilter", "Defringe",
+    "ToningHue", "ToningSaturation",
+}
+
+local LOCAL_PARAM_INDEX = (function()
+    local idx = {}
+    for _, p in ipairs(LOCAL_PARAMS) do idx[p:lower()] = "local_" .. p end
+    return idx
+end)()
+
 local function getCurrentPhoto()
     local catalog = LrApplication.activeCatalog()
     local photo = catalog:getTargetPhoto()
@@ -241,7 +262,6 @@ local function getCurrentPhoto()
 end
 
 local function applyDevelopSettings(settings)
-    local catalog = LrApplication.activeCatalog()
     local photo = getCurrentPhoto()
     if not photo then
         return false, "No photo selected in Lightroom"
@@ -249,21 +269,36 @@ local function applyDevelopSettings(settings)
 
     local applied = {}
     local skipped = {}
+    local catalog = LrApplication.activeCatalog()
 
-    catalog:withWriteAccessDo("Claude Edit", function()
+    -- Run setValue + catalog flush in a fresh LrTask so the call stack is clean
+    -- (no pending C function references that would block withWriteAccessDo yield).
+    local done = false
+    LrTasks.startAsyncTask(function()
         for key, value in pairs(settings) do
-            -- Normalise key: try exact match first, then lowercase lookup
             local paramName = PARAM_INDEX[key:lower()] or key
-            local ok, err = pcall(function()
+            local ok2, err2 = pcall(function()
                 LrDevelopController.setValue(paramName, tonumber(value) or value)
             end)
-            if ok then
+            if ok2 then
                 table.insert(applied, paramName .. "=" .. tostring(value))
+                log:info("setValue " .. paramName .. "=" .. tostring(value))
             else
-                table.insert(skipped, paramName .. "(" .. tostring(err) .. ")")
+                table.insert(skipped, paramName .. "(" .. tostring(err2) .. ")")
+                log:error("setValue failed " .. paramName .. ": " .. tostring(err2))
             end
         end
+        -- Flush buffered Local* changes to the catalog.
+        catalog:withWriteAccessDo("Claude Flush Settings", function() end, {timeout = 30})
+        done = true
     end)
+
+    -- Wait for the async task (cooperative yield via sleep).
+    local elapsed = 0
+    while not done and elapsed < 10 do
+        LrTasks.sleep(0.05)
+        elapsed = elapsed + 0.05
+    end
 
     local msg = "Applied: " .. table.concat(applied, ", ")
     if #skipped > 0 then
@@ -303,7 +338,7 @@ local function applyAutoTone()
     if not photo then return false, "No photo selected" end
     catalog:withWriteAccessDo("Claude AutoTone", function()
         LrDevelopController.autoTone()
-    end)
+    end, {timeout = 30})
     return true, "Auto tone applied"
 end
 
@@ -313,28 +348,105 @@ local function resetAllSettings()
     if not photo then return false, "No photo selected" end
     catalog:withWriteAccessDo("Claude Reset", function()
         LrDevelopController.resetAllDevelopAdjustments()
-    end)
+    end, {timeout = 30})
     return true, "All develop settings reset"
 end
 
 local function exportPreview(size)
+    log:info("exportPreview called size=" .. tostring(size))
     local photo = getCurrentPhoto()
     if not photo then return nil, "No photo selected" end
 
     local thumbSize = math.min(tonumber(size) or 1500, 2048)
     local jpegData  = nil
-    local done      = false
 
-    -- requestJpegThumbnail is callback-based; poll until the callback fires
-    photo:requestJpegThumbnail(thumbSize, thumbSize, function(jpeg, _reason)
-        jpegData = jpeg
-        done     = true
+    -- Fast path: requestJpegThumbnail reads from the preview cache.
+    -- Must be called inside withReadAccessDo; the callback fires synchronously
+    -- when the preview is cached, or with reason="error loading thumb" if not.
+    -- Fall through to progressively smaller sizes before giving up.
+    local catalog = LrApplication.activeCatalog()
+    local sizes   = { thumbSize }
+    if thumbSize > 640 then sizes[#sizes + 1] = 640 end
+    if thumbSize > 240 then sizes[#sizes + 1] = 240 end
+
+    for _, sz in ipairs(sizes) do
+        local fired = false
+        local cbReason = nil
+        log:info("requestJpegThumbnail size=" .. sz)
+
+        catalog:withReadAccessDo(function()
+            photo:requestJpegThumbnail(sz, sz, function(jpeg, reason)
+                cbReason = tostring(reason)
+                if jpeg then jpegData = jpeg end
+                fired = true
+            end)
+        end)
+
+        -- Callback fires synchronously inside withReadAccessDo when cached;
+        -- wait briefly in case it is deferred.
+        if not fired then
+            local t = 0
+            while not fired and t < 2.0 do
+                LrTasks.sleep(0.05)
+                t = t + 0.05
+            end
+        end
+
+        log:info("requestJpegThumbnail size=" .. sz ..
+            " fired=" .. tostring(fired) ..
+            " hasData=" .. tostring(jpegData ~= nil) ..
+            " reason=" .. tostring(cbReason))
+
+        if jpegData then break end
+    end
+
+    if jpegData then
+        return base64Encode(jpegData), nil
+    end
+
+    -- Slow path: LrExportSession renders the photo directly from develop
+    -- settings, bypassing the preview cache. Always works, takes ~2-5 s.
+    local outPath = "/tmp/lr_mcp_preview.jpg"
+    LrFileUtils.delete(outPath)
+
+    local exportOk, exportErr = pcall(function()
+        local LrExportSession = import "LrExportSession"
+        local session = LrExportSession {
+            photosToExport = { photo },
+            exportSettings = {
+                LR_export_destinationType    = "specificFolder",
+                LR_export_destinationPathPrefix = "/tmp",
+                LR_export_useSubfolder       = false,
+                LR_format                    = "JPEG",
+                LR_jpeg_quality              = 0.82,
+                LR_size_doConstrain          = true,
+                LR_size_maxHeight            = thumbSize,
+                LR_size_maxWidth             = thumbSize,
+                LR_size_resizeType           = "longEdge",
+                LR_size_units                = "pixels",
+                LR_outputSharpeningOn        = false,
+                LR_export_colorSpace         = "sRGB",
+                LR_reimportExportedPhoto     = false,
+                LR_collisionHandling         = "overwrite",
+                LR_removeLocationMetadata    = true,
+            },
+        }
+        for _, rendition in session:renditions() do
+            local success, pathOrMsg = rendition:waitForRender()
+            if success and pathOrMsg then
+                local f = io.open(pathOrMsg, "rb")
+                if f then
+                    local data = f:read("*a")
+                    f:close()
+                    LrFileUtils.delete(pathOrMsg)
+                    jpegData = data
+                end
+            end
+        end
     end)
 
-    local elapsed = 0
-    while not done and elapsed < 5.0 do
-        LrTasks.sleep(0.05)
-        elapsed = elapsed + 0.05
+    if not exportOk then
+        return nil, "Export error: " .. tostring(exportErr)
     end
 
     if not jpegData then
@@ -371,7 +483,7 @@ local function batchApplySettings(settings)
                 skipped = skipped + 1
                 log:error("Batch apply failed for photo: " .. tostring(err))
             end
-        end)
+        end, {timeout = 30})
     end
 
     return true, string.format("Applied to %d photos, %d skipped", count, skipped)
@@ -403,7 +515,7 @@ local function cropPhoto(params)
                 table.insert(applied, k .. "=" .. tostring(v))
             end
         end
-    end)
+    end, {timeout = 30})
 
     if #applied == 0 then
         return false, "No crop parameters provided"
@@ -425,7 +537,7 @@ local DIRECT_MASK_TYPES = {
     gradient=true, radialGradient=true, brush=true,
 }
 
-local function addMask(maskType, maskParams)
+local function addMask(maskType, maskParams, adjustments)
     local args = {}
 
     if AI_SUBTYPES[maskType] then
@@ -442,19 +554,36 @@ local function addMask(maskType, maskParams)
             "luminance, color, depth, gradient, radialGradient, brush"
     end
 
-    -- Pass through any extra params (e.g. angle, midpoint, feather for gradients)
     if type(maskParams) == "table" then
         for k, v in pairs(maskParams) do
             if k ~= "maskType" and k ~= "maskSubType" then args[k] = v end
         end
     end
 
-    local ok, err = pcall(function()
-        LrDevelopController.createNewMask(args)
-    end)
-    if not ok then
-        return false, "Failed to create mask: " .. tostring(err)
+    local catalog = LrApplication.activeCatalog()
+
+    -- createNewMask is a develop controller UI operation — withWriteAccessDo rolls it back.
+    -- Call directly for all mask types (same as AI masks).
+    if args.maskSubType then
+        LrDevelopController.createNewMask(args.maskType, args.maskSubType)
+    else
+        LrDevelopController.createNewMask(args.maskType)
     end
+
+    -- Apply local adjustment sliders to the newly created (currently active) mask.
+    if type(adjustments) == "table" and next(adjustments) ~= nil then
+        local applied = {}
+        for key, value in pairs(adjustments) do
+            local lrKey = LOCAL_PARAM_INDEX[key:lower()] or ("local_" .. key)
+            LrDevelopController.setValue(lrKey, value)
+            table.insert(applied, key)
+        end
+        if #applied > 0 then
+            log:info("Mask adjustments applied: " .. table.concat(applied, ", "))
+        end
+    end
+
+    log:info("Mask created: " .. maskType)
     return true, "Mask created: " .. maskType
 end
 
@@ -492,7 +621,7 @@ local function lensBlur(params)
             pcall(function() LrDevelopController.setValue("LensBlurHighlightsBoost", tonumber(params.highlightsBoost)) end)
             table.insert(applied, "highlightsBoost=" .. tostring(params.highlightsBoost))
         end
-    end)
+    end, {timeout = 30})
 
     -- Bokeh shape (outside write access — it's a UI/render property)
     if params.bokeh ~= nil then
@@ -558,7 +687,7 @@ local function enhancePhoto(params)
     local ok2, err2 = pcall(function()
         catalog:withWriteAccessDo("Claude Enhance", function()
             LrDevelopController.setEnhance(opts)
-        end)
+        end, {timeout = 30})
     end)
     if not ok2 then
         return false, "Enhance failed: " .. tostring(err2)
@@ -621,7 +750,9 @@ local function handleRequest(data)
         response = { success = s, message = msg }
 
     elseif cmd == "add_mask" then
-        local s, msg = addMask(req.maskType, req.params)
+        -- Do NOT pcall addMask — withWriteAccessDo yields internally and Lua 5.1
+        -- cannot yield across a C pcall boundary.
+        local s, msg = addMask(req.maskType, req.params, req.adjustments)
         response = { success = s, message = msg }
 
     elseif cmd == "lens_blur" then
@@ -640,30 +771,39 @@ return jsonEncode(response)
 end
 
 function Server.start()
-    if Server._running then
-        log:info("Server already running")
-        return
-    end
+    -- Bump the persistent global generation counter so any currently-running
+    -- loop self-terminates on its next iteration. Using a global (not Server._generation)
+    -- ensures tasks from a previous require "Server" call (which created a fresh Server{})
+    -- are also evicted — they still read _clrb_gen from the shared Lua environment.
+    _clrb_gen = _clrb_gen + 1
+    local myGeneration = _clrb_gen
+    Server._running    = true
 
-    Server._running = true
     -- Clean up any stale files from a previous run
     LrFileUtils.delete(REQ_FILE)
     LrFileUtils.delete(RES_FILE)
-    log:info("Claude LR Bridge started (file IPC mode)")
+    log:info("Claude LR Bridge v" .. VERSION .. " started (file IPC mode)")
 
-    while Server._running do
-        local f = io.open(REQ_FILE, "r")
-        if f then
-            local data = f:read("*a")
-            f:close()
-            LrFileUtils.delete(REQ_FILE)
+    local PROC_FILE = REQ_FILE .. ".processing"
+    while Server._running and _clrb_gen == myGeneration do
+        -- Atomic rename: only one polling loop can claim each request file.
+        -- LrFileUtils.move returns true/false (no throw), so check return value directly.
+        if LrFileUtils.move(REQ_FILE, PROC_FILE) then
+            local f = io.open(PROC_FILE, "r")
+            local data = f and f:read("*a")
+            if f then f:close() end
+            LrFileUtils.delete(PROC_FILE)
 
             if data and #data > 0 then
                 local responseStr = handleRequest(data)
+                log:info("Writing response len=" .. #responseStr)
                 local rf = io.open(RES_FILE, "w")
                 if rf then
                     rf:write(responseStr)
                     rf:close()
+                    log:info("Response written OK")
+                else
+                    log:error("Failed to open RES_FILE for writing")
                 end
             end
         end

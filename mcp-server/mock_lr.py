@@ -122,6 +122,16 @@ class _State:
                 self.settings = dict(_DEFAULT_SETTINGS)
                 return {"success": True, "message": "All develop settings reset"}
 
+            if cmd == "add_mask":
+                mask_type = req.get("maskType", "unknown")
+                adjustments = req.get("adjustments") or {}
+                msg = f"Mask created: {mask_type}"
+                if adjustments:
+                    msg += " with adjustments: " + ", ".join(
+                        f"{k}={v}" for k, v in adjustments.items()
+                    )
+                return {"success": True, "message": msg}
+
             if cmd == "export_preview":
                 size = max(1, min(int(req.get("size", 200)), 2048))
                 b64 = _make_jpeg(self.settings, size)

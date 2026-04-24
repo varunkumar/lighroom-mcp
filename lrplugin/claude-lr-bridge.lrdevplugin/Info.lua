@@ -4,7 +4,7 @@ return {
     LrPluginName = "Claude LR Bridge",
     LrPluginInfoUrl = "https://github.com/varunkumar/lighroom-mcp",
 
-    VERSION = { major = 1, minor = 0, revision = 0 },
+    VERSION = { major = 1, minor = 4, revision = 2 },
 
     LrExportMenuItems = {
         {

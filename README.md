@@ -156,6 +156,22 @@ Select multiple photos in Lightroom, then:
 → lr_batch_apply_settings with Temperature 6800, Shadows +15, Highlights -20
 ```
 
+### Masking
+
+AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`, `luminance`, `color`, `depth`) are placed automatically. Manual types (`gradient`, `radialGradient`, `brush`) activate the tool — the user draws the mask in Lightroom.
+
+```
+"Darken the sky"
+→ lr_add_mask  maskType=sky  adjustments={Exposure:-1, Highlights:-80}
+
+"Add a subject mask and boost clarity"
+→ lr_add_mask  maskType=subject  adjustments={Clarity:40, Texture:20}
+
+"Add a gradient and I'll position it"
+→ lr_add_mask  maskType=gradient  adjustments={Exposure:-1.5}
+   (then drag in Lightroom to set the gradient position)
+```
+
 ### Other commands
 
 ```
@@ -178,7 +194,7 @@ Select multiple photos in Lightroom, then:
 | `lr_auto_tone`            | Run Lightroom's Auto Tone                                     |
 | `lr_reset`                | Reset all develop settings to defaults                        |
 | `lr_crop`                 | Crop and/or straighten the selected photo                     |
-| `lr_add_mask`             | Add an AI or manual mask (subject, sky, gradient, brush…)     |
+| `lr_add_mask`             | Add a mask with optional local adjust sliders (subject, sky, gradient…) |
 | `lr_lens_blur`            | Apply AI Lens Blur with bokeh shape control                   |
 | `lr_enhance`              | Run AI Denoise, Super Resolution, or Raw Details              |
 

@@ -21,7 +21,7 @@ POLL = 0.05   # seconds between polls
 app = Server("lightroom-bridge")
 
 
-def send_to_lightroom(command: dict) -> dict:
+def send_to_lightroom(command: dict, timeout: float = TIMEOUT) -> dict:
     """Write a command to the request file and wait for the response file."""
     try:
         # Clean up any stale response from a previous call
@@ -36,15 +36,21 @@ def send_to_lightroom(command: dict) -> dict:
 
         # Poll for the response file
         elapsed = 0.0
-        while elapsed < TIMEOUT:
+        while elapsed < timeout:
             if os.path.exists(RES_FILE):
                 try:
                     with open(RES_FILE, "r") as f:
                         data = f.read()
+                    result = json.loads(data)  # parse before deleting
                     os.remove(RES_FILE)
-                    return json.loads(data)
+                    return result
+                except (json.JSONDecodeError, ValueError):
+                    pass  # partial write in progress — don't delete, retry
                 except Exception:
-                    pass  # file still being written, retry
+                    try:
+                        os.remove(RES_FILE)
+                    except Exception:
+                        pass
             time.sleep(POLL)
             elapsed += POLL
 
@@ -245,10 +251,10 @@ async def list_tools() -> list[types.Tool]:
             name="lr_add_mask",
             description=(
                 "Add a mask to the selected photo in Lightroom Classic. "
-                "AI selection types (use subject AI): "
-                "'subject', 'sky', 'background', 'objects', 'people', 'landscape'. "
-                "Range mask types: 'luminance', 'color', 'depth'. "
-                "Manual types: 'gradient' (linear), 'radialGradient' (elliptical), 'brush'."
+                "AI types (fully automatic): 'subject', 'sky', 'background', 'objects', 'people', 'landscape'. "
+                "Range types (automatic): 'luminance', 'color', 'depth'. "
+                "Manual types (user must draw after calling): 'gradient' (linear), 'radialGradient' (elliptical), 'brush'. "
+                "All types accept an optional 'adjustments' object to apply local develop sliders to the new mask."
             ),
             inputSchema={
                 "type": "object",
@@ -263,6 +269,19 @@ async def list_tools() -> list[types.Tool]:
                     "params": {
                         "type": "object",
                         "description": "Optional mask parameters (e.g. angle, midpoint, feather for gradients)",
+                        "additionalProperties": True,
+                    },
+                    "adjustments": {
+                        "type": "object",
+                        "description": (
+                            "Optional develop sliders to apply to the new mask "
+                            "(e.g. {\"Exposure\": 0.5, \"Highlights\": -30, \"Saturation\": 20}). "
+                            "Keys are the same parameter names as lr_apply_settings but applied "
+                            "locally to only this mask. Supported: Exposure, Contrast, Highlights, "
+                            "Shadows, Whites, Blacks, Clarity, Texture, Dehaze, Vibrance, "
+                            "Saturation, Temperature, Tint, Sharpness, LuminanceNoise, ColorNoise, "
+                            "MoireFilter, Defringe, ToningHue, ToningSaturation."
+                        ),
                         "additionalProperties": True,
                     },
                 },
@@ -292,11 +311,12 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             result = {"success": False, "error": "No settings provided"}
         else:
             result = send_to_lightroom(
-                {"command": "apply_settings", "settings": settings})
+                {"command": "apply_settings", "settings": settings}, timeout=45.0)
 
     elif name == "lr_export_preview":
         size = min(int(arguments.get("size", 1500)), 2048)
-        result = send_to_lightroom({"command": "export_preview", "size": size})
+        result = send_to_lightroom(
+            {"command": "export_preview", "size": size}, timeout=30.0)
         if result.get("success") and result.get("data"):
             return [
                 types.ImageContent(
@@ -331,7 +351,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                 "command": "add_mask",
                 "maskType": mask_type,
                 "params": arguments.get("params", {}),
-            })
+                "adjustments": arguments.get("adjustments", {}),
+            }, timeout=120.0)
 
     elif name == "lr_lens_blur":
         params = {k: v for k, v in arguments.items()}

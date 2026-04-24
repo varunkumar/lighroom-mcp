@@ -83,6 +83,24 @@ Returns MCP `ImageContent` (JPEG). Typical workflow:
 
 Parameter names are case-insensitive. `lr_batch_apply_settings` uses `catalog:getTargetPhotos()` — all photos currently selected in Lightroom.
 
+### lr_add_mask
+
+```json
+{
+  "maskType": "sky",
+  "adjustments": { "Exposure": -0.5, "Highlights": -40, "Saturation": 20 }
+}
+```
+
+`maskType` selects the mask shape/detection method. Mask types fall into two categories:
+
+- **Automatic** (no user interaction): `subject`, `sky`, `background`, `objects`, `people`, `landscape`, `luminance`, `color`, `depth` — LR detects and places the mask immediately.
+- **Manual** (user must draw after the call): `gradient`, `radialGradient`, `brush` — the call activates the tool; the user drags/paints to define the mask area.
+
+The optional `adjustments` object applies local develop slider values to the newly created mask. Supported params: `Exposure`, `Contrast`, `Highlights`, `Shadows`, `Whites`, `Blacks`, `Clarity`, `Texture`, `Dehaze`, `Vibrance`, `Saturation`, `Temperature`, `Tint`, `Sharpness`, `LuminanceNoise`, `ColorNoise`, `MoireFilter`, `Defringe`, `ToningHue`, `ToningSaturation`.
+
+Implementation: `LrDevelopController.createNewMask()` is called directly (no `catalog:withWriteAccessDo` — wrapping it causes the mask to be rolled back). Adjustments are applied via `LrDevelopController.setValue("local_*")` on the active mask immediately after.
+
 ## Develop Parameter Ranges
 
 **Tone**
@@ -217,6 +235,51 @@ Key files in `lrplugin/claude-lr-bridge.lrdevplugin/`:
 ## Reference
 
 - [Lightroom Classic SDK Guide](docs/Lightroom%20Classic%20SDK%20Guide.pdf) — official Adobe SDK documentation. Key sections: `LrDevelopController` API reference, `LrTasks` async model, plugin manifest keys, Lua sandbox restrictions.
+
+## Versioning — MANDATORY
+
+**Every change to `Server.lua` MUST bump the version in both places or the running build will be impossible to identify in logs.**
+
+1. `lrplugin/claude-lr-bridge.lrdevplugin/Info.lua` — `VERSION = { major, minor, revision }`
+2. `lrplugin/claude-lr-bridge.lrdevplugin/Server.lua` — `local VERSION = "x.y.z"`
+
+Both must always match. The version is logged on every server start:
+```
+Claude LR Bridge v1.1.0 started (file IPC mode)
+```
+
+**Default: bump `revision` for every change**, even small ones. Only use `minor` for new user-visible features and `major` for breaking wire protocol changes. When in doubt, bump revision.
+
+## Logs
+
+### Plugin log (primary debug source)
+
+```
+~/Library/Logs/Adobe/Lightroom/LrClassicLogs/ClaudeLRBridge.log
+```
+
+Written by `LrLogger("ClaudeLRBridge")` with `log:enable("logfile")`. Appended across sessions. Contains:
+- Server start/stop with version
+- All `log:info` / `log:error` calls from `Server.lua`
+- `requestJpegThumbnail` diagnostics, response write confirmations, etc.
+
+To tail live: `tail -f ~/Library/Logs/Adobe/Lightroom/LrClassicLogs/ClaudeLRBridge.log`
+
+### Lightroom console log (Lua runtime errors)
+
+```
+~/Library/Application Support/Adobe/Lightroom/lrc_console.log
+```
+
+Contains Lua stack traces from unhandled errors inside Lightroom's plugin sandbox (e.g. bad API calls, nil indexing). Check this when the plugin fails to start or a command crashes silently.
+
+### Server start confirmation
+
+After any plugin restart, verify the correct version loaded:
+```
+tail -3 ~/Library/Logs/Adobe/Lightroom/LrClassicLogs/ClaudeLRBridge.log
+```
+Expected: `Claude LR Bridge vX.Y.Z started (file IPC mode)` with no "Server already running" after it (which would indicate a double-start race).
 
 ## Adding New Commands
 

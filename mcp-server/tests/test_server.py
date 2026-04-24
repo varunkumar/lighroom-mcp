@@ -125,6 +125,42 @@ def test_add_mask_mcp_tool(mock_lr):
     assert data["success"] is True
 
 
+# ── lr_update_mask ────────────────────────────────────────────────────────────
+
+def test_update_mask_protocol(mock_lr):
+    import server
+    result = server.send_to_lightroom({
+        "command": "update_mask",
+        "adjustments": {"Exposure": 1.0, "Saturation": -20},
+    })
+    assert result["success"] is True
+    assert "Exposure" in result["message"]
+
+
+def test_update_mask_no_adjustments(mock_lr):
+    import server
+    result = server.send_to_lightroom({
+        "command": "update_mask",
+        "adjustments": {},
+    })
+    assert result["success"] is False
+    assert "adjustments" in result["error"].lower()
+
+
+def test_update_mask_mcp_tool(mock_lr):
+    import json
+    import server
+    from mcp import types
+    contents = asyncio.run(server.call_tool(
+        "lr_update_mask",
+        {"adjustments": {"Highlights": -50, "Clarity": 20}},
+    ))
+    assert len(contents) == 1
+    assert isinstance(contents[0], types.TextContent)
+    data = json.loads(contents[0].text)
+    assert data["success"] is True
+
+
 # ── batch_apply_settings ────────────────────────────────────────────────────
 
 def test_batch_apply_settings_protocol(mock_lr):

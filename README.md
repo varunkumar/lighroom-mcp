@@ -170,6 +170,10 @@ AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`,
 "Add a gradient and I'll position it"
 → lr_add_mask  maskType=gradient  adjustments={Exposure:-1.5}
    (then drag in Lightroom to set the gradient position)
+
+"I drew the gradient, now darken it more"
+→ lr_update_mask  adjustments={Exposure:-1, Highlights:-60}
+  (select the mask in LR's Masks panel first)
 ```
 
 ### Other commands
@@ -195,6 +199,7 @@ AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`,
 | `lr_reset`                | Reset all develop settings to defaults                        |
 | `lr_crop`                 | Crop and/or straighten the selected photo                     |
 | `lr_add_mask`             | Add a mask with optional local adjust sliders (subject, sky, gradient…) |
+| `lr_update_mask`          | Update local adjust sliders on the currently selected mask    |
 | `lr_lens_blur`            | Apply AI Lens Blur with bokeh shape control                   |
 | `lr_enhance`              | Run AI Denoise, Super Resolution, or Raw Details              |
 

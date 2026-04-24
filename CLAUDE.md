@@ -59,6 +59,7 @@ pytest tests/ -v                      # run all tests against the mock
 | `lr_reset`                | Reset all develop settings to defaults                             |
 | `lr_crop`                 | Crop and/or straighten the selected photo                          |
 | `lr_add_mask`             | Add a mask (subject, sky, gradient, brush, etc.)                   |
+| `lr_update_mask`          | Apply local adjust sliders to the currently selected mask          |
 | `lr_lens_blur`            | Apply AI Lens Blur (depth-of-field) with bokeh shape control       |
 | `lr_enhance`              | Run AI Denoise, Super Resolution, or Raw Details enhance           |
 
@@ -100,6 +101,14 @@ Parameter names are case-insensitive. `lr_batch_apply_settings` uses `catalog:ge
 The optional `adjustments` object applies local develop slider values to the newly created mask. Supported params: `Exposure`, `Contrast`, `Highlights`, `Shadows`, `Whites`, `Blacks`, `Clarity`, `Texture`, `Dehaze`, `Vibrance`, `Saturation`, `Temperature`, `Tint`, `Sharpness`, `LuminanceNoise`, `ColorNoise`, `MoireFilter`, `Defringe`, `ToningHue`, `ToningSaturation`.
 
 Implementation: `LrDevelopController.createNewMask()` is called directly (no `catalog:withWriteAccessDo` — wrapping it causes the mask to be rolled back). Adjustments are applied via `LrDevelopController.setValue("local_*")` on the active mask immediately after.
+
+### lr_update_mask
+
+```json
+{ "adjustments": { "Exposure": 0.5, "Highlights": -30 } }
+```
+
+Applies local develop sliders to whichever mask is currently selected in LR's Masks panel. The user selects the target mask in LR first, then calls this tool. Same parameter names and ranges as the `adjustments` field in `lr_add_mask`. Implemented via `LrDevelopController.setValue("local_*")` on the active mask.
 
 ## Develop Parameter Ranges
 

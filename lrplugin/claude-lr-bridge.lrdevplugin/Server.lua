@@ -13,7 +13,7 @@ local LrLogger            = import "LrLogger"
 local REQ_FILE      = "/tmp/lr_mcp_req.json"
 local RES_FILE      = "/tmp/lr_mcp_res.json"
 local POLL_INTERVAL = 0.05  -- seconds
-local VERSION       = "1.4.2"  -- keep in sync with Info.lua VERSION
+local VERSION       = "1.5.0"  -- keep in sync with Info.lua VERSION
 
 -- ── Bundled JSON encoder/decoder (no LrJSON dependency) ─────────────────────
 local function jsonEncodeValue(val)
@@ -587,6 +587,21 @@ local function addMask(maskType, maskParams, adjustments)
     return true, "Mask created: " .. maskType
 end
 
+local function updateMask(adjustments)
+    if type(adjustments) ~= "table" or next(adjustments) == nil then
+        return false, "No adjustments provided"
+    end
+    local applied = {}
+    for key, value in pairs(adjustments) do
+        local lrKey = LOCAL_PARAM_INDEX[key:lower()] or ("local_" .. key)
+        LrDevelopController.setValue(lrKey, value)
+        table.insert(applied, key)
+    end
+    local msg = "Mask updated: " .. table.concat(applied, ", ")
+    log:info(msg)
+    return true, msg
+end
+
 -- Valid bokeh shapes for Lens Blur
 local BOKEH_TYPES = {
     Circle=true, SoapBubble=true, Blade=true, Ring=true, Anamorphic=true,
@@ -753,6 +768,10 @@ local function handleRequest(data)
         -- Do NOT pcall addMask — withWriteAccessDo yields internally and Lua 5.1
         -- cannot yield across a C pcall boundary.
         local s, msg = addMask(req.maskType, req.params, req.adjustments)
+        response = { success = s, message = msg }
+
+    elseif cmd == "update_mask" then
+        local s, msg = updateMask(req.adjustments)
         response = { success = s, message = msg }
 
     elseif cmd == "lens_blur" then

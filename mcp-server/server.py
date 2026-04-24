@@ -288,6 +288,28 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["maskType"],
             },
         ),
+        types.Tool(
+            name="lr_update_mask",
+            description=(
+                "Update the local develop sliders on the mask that is currently selected "
+                "in Lightroom's Masks panel. Select the target mask in LR first, then call "
+                "this tool with the slider values to apply. Supported: Exposure, Contrast, "
+                "Highlights, Shadows, Whites, Blacks, Clarity, Texture, Dehaze, Vibrance, "
+                "Saturation, Temperature, Tint, Sharpness, LuminanceNoise, ColorNoise, "
+                "MoireFilter, Defringe, ToningHue, ToningSaturation."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "adjustments": {
+                        "type": "object",
+                        "description": "Slider values to apply to the active mask (e.g. {\"Exposure\": 0.5, \"Highlights\": -30})",
+                        "additionalProperties": True,
+                    },
+                },
+                "required": ["adjustments"],
+            },
+        ),
     ]
 
 
@@ -353,6 +375,16 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                 "params": arguments.get("params", {}),
                 "adjustments": arguments.get("adjustments", {}),
             }, timeout=120.0)
+
+    elif name == "lr_update_mask":
+        adjustments = arguments.get("adjustments", {})
+        if not adjustments:
+            result = {"success": False, "error": "No adjustments provided"}
+        else:
+            result = send_to_lightroom({
+                "command": "update_mask",
+                "adjustments": adjustments,
+            })
 
     elif name == "lr_lens_blur":
         params = {k: v for k, v in arguments.items()}

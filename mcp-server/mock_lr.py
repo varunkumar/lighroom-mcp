@@ -132,6 +132,15 @@ class _State:
                     )
                 return {"success": True, "message": msg}
 
+            if cmd == "update_mask":
+                adjustments = req.get("adjustments") or {}
+                if not adjustments:
+                    return {"success": False, "error": "No adjustments provided"}
+                msg = "Mask updated with adjustments: " + ", ".join(
+                    f"{k}={v}" for k, v in adjustments.items()
+                )
+                return {"success": True, "message": msg}
+
             if cmd == "export_preview":
                 size = max(1, min(int(req.get("size", 200)), 2048))
                 b64 = _make_jpeg(self.settings, size)

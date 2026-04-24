@@ -22,8 +22,8 @@ try:
 except ImportError:
     HAS_PILLOW = False
 
-REQ_FILE = "/tmp/lr_mcp_req.json"
-RES_FILE = "/tmp/lr_mcp_res.json"
+REQ_FILE = os.environ.get("LR_MCP_REQ", "/tmp/lr_mcp_req.json")
+RES_FILE = os.environ.get("LR_MCP_RES", "/tmp/lr_mcp_res.json")
 POLL = 0.05
 
 _DEFAULT_SETTINGS = {

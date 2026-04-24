@@ -13,12 +13,19 @@ import pytest
 # Make server.py importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+# Use test-only IPC paths so a running Lightroom plugin doesn't race the mock.
+_TEST_REQ = "/tmp/lr_mcp_req_test.json"
+_TEST_RES = "/tmp/lr_mcp_res_test.json"
+os.environ["LR_MCP_REQ"] = _TEST_REQ
+os.environ["LR_MCP_RES"] = _TEST_RES
+
 
 @pytest.fixture()
 def mock_lr():
     """Start mock_lr.py as a subprocess; yield; terminate."""
     mock_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mock_lr.py")
-    proc = subprocess.Popen([sys.executable, mock_path], stdout=subprocess.PIPE)
+    env = {**os.environ, "LR_MCP_REQ": _TEST_REQ, "LR_MCP_RES": _TEST_RES}
+    proc = subprocess.Popen([sys.executable, mock_path], stdout=subprocess.PIPE, env=env)
     # Wait until the server prints its ready line
     proc.stdout.readline()
     yield proc

@@ -3,8 +3,6 @@ local LrDialogs = import "LrDialogs"
 
 LrTasks.startAsyncTask(function()
     require "Server"
-    Server.stop()   -- stop any stale loop from a previous (crashed) load
-    LrTasks.sleep(0.1)  -- let old loop exit
-    LrDialogs.message("Claude LR Bridge", "Starting Claude LR Bridge (file IPC)...")
-    Server.start()
+    LrDialogs.showBezel("Claude LR Bridge started")
+    Server.start()  -- generation counter evicts any previously running loop
 end)

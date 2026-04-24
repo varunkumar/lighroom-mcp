@@ -13,8 +13,8 @@ from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-REQ_FILE = "/tmp/lr_mcp_req.json"
-RES_FILE = "/tmp/lr_mcp_res.json"
+REQ_FILE = os.environ.get("LR_MCP_REQ", "/tmp/lr_mcp_req.json")
+RES_FILE = os.environ.get("LR_MCP_RES", "/tmp/lr_mcp_res.json")
 TIMEOUT = 10.0   # seconds to wait for Lua to respond
 POLL = 0.05   # seconds between polls
 

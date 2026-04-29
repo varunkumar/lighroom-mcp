@@ -3,6 +3,6 @@ local LrDialogs = import "LrDialogs"
 
 LrTasks.startAsyncTask(function()
     require "Server"
-    Server.stop()
-    LrDialogs.showBezel("Claude LR Bridge stopped")
+    LrDialogs.showBezel("LR MCP Bridge started")
+    Server.start()  -- generation counter evicts any previously running loop
 end)

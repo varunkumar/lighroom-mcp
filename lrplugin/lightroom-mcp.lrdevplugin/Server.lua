@@ -1,5 +1,5 @@
 --[[
-  Claude LR Bridge - Server Module
+  Lightroom MCP Bridge - Server Module
   Uses file-based IPC to communicate with the Python MCP server.
   Python writes /tmp/lr_mcp_req.json; Lua polls, processes, writes /tmp/lr_mcp_res.json.
 --]]
@@ -13,7 +13,7 @@ local LrLogger            = import "LrLogger"
 local REQ_FILE      = "/tmp/lr_mcp_req.json"
 local RES_FILE      = "/tmp/lr_mcp_res.json"
 local POLL_INTERVAL = 0.05  -- seconds
-local VERSION       = "1.5.0"  -- keep in sync with Info.lua VERSION
+local VERSION       = "1.0.3"  -- keep in sync with Info.lua VERSION
 
 -- ── Bundled JSON encoder/decoder (no LrJSON dependency) ─────────────────────
 local function jsonEncodeValue(val)
@@ -160,7 +160,7 @@ local function base64Encode(data)
     return encoded
 end
 
-local log = LrLogger("ClaudeLRBridge")
+local log = LrLogger("LrMCPBridge")
 log:enable("logfile")
 
 Server = {}
@@ -289,7 +289,7 @@ local function applyDevelopSettings(settings)
             end
         end
         -- Flush buffered Local* changes to the catalog.
-        catalog:withWriteAccessDo("Claude Flush Settings", function() end, {timeout = 30})
+        catalog:withWriteAccessDo("Flush Settings", function() end, {timeout = 30})
         done = true
     end)
 
@@ -333,12 +333,20 @@ local function getCurrentSettings()
 end
 
 local function applyAutoTone()
-    local catalog = LrApplication.activeCatalog()
     local photo = getCurrentPhoto()
     if not photo then return false, "No photo selected" end
-    catalog:withWriteAccessDo("Claude AutoTone", function()
-        LrDevelopController.autoTone()
-    end, {timeout = 30})
+    local catalog = LrApplication.activeCatalog()
+    local done = false
+    LrTasks.startAsyncTask(function()
+        LrDevelopController.setAutoTone()
+        catalog:withWriteAccessDo("Flush AutoTone", function() end, {timeout = 30})
+        done = true
+    end)
+    local elapsed = 0
+    while not done and elapsed < 10 do
+        LrTasks.sleep(0.05)
+        elapsed = elapsed + 0.05
+    end
     return true, "Auto tone applied"
 end
 
@@ -346,7 +354,7 @@ local function resetAllSettings()
     local catalog = LrApplication.activeCatalog()
     local photo = getCurrentPhoto()
     if not photo then return false, "No photo selected" end
-    catalog:withWriteAccessDo("Claude Reset", function()
+    catalog:withWriteAccessDo("Reset", function()
         LrDevelopController.resetAllDevelopAdjustments()
     end, {timeout = 30})
     return true, "All develop settings reset"
@@ -360,20 +368,18 @@ local function exportPreview(size)
     local thumbSize = math.min(tonumber(size) or 1500, 2048)
     local jpegData  = nil
 
-    -- Fast path: requestJpegThumbnail reads from the preview cache.
-    -- Must be called inside withReadAccessDo; the callback fires synchronously
-    -- when the preview is cached, or with reason="error loading thumb" if not.
-    -- Fall through to progressively smaller sizes before giving up.
+    -- Use requestJpegThumbnail from the preview cache. LrExportSession cannot
+    -- be called from the polling-loop task (requires Lightroom's export service
+    -- context). The thumbnail may be larger than thumbSize if 1:1 previews are
+    -- cached; that is a Lightroom limitation.
     local catalog = LrApplication.activeCatalog()
     local sizes   = { thumbSize }
     if thumbSize > 640 then sizes[#sizes + 1] = 640 end
     if thumbSize > 240 then sizes[#sizes + 1] = 240 end
 
     for _, sz in ipairs(sizes) do
-        local fired = false
+        local fired    = false
         local cbReason = nil
-        log:info("requestJpegThumbnail size=" .. sz)
-
         catalog:withReadAccessDo(function()
             photo:requestJpegThumbnail(sz, sz, function(jpeg, reason)
                 cbReason = tostring(reason)
@@ -381,9 +387,6 @@ local function exportPreview(size)
                 fired = true
             end)
         end)
-
-        -- Callback fires synchronously inside withReadAccessDo when cached;
-        -- wait briefly in case it is deferred.
         if not fired then
             local t = 0
             while not fired and t < 2.0 do
@@ -391,69 +394,33 @@ local function exportPreview(size)
                 t = t + 0.05
             end
         end
-
-        log:info("requestJpegThumbnail size=" .. sz ..
-            " fired=" .. tostring(fired) ..
-            " hasData=" .. tostring(jpegData ~= nil) ..
-            " reason=" .. tostring(cbReason))
-
+        log:info("requestJpegThumbnail size=" .. sz
+            .. " fired=" .. tostring(fired)
+            .. " hasData=" .. tostring(jpegData ~= nil)
+            .. " reason=" .. tostring(cbReason))
         if jpegData then break end
     end
 
-    if jpegData then
-        return base64Encode(jpegData), nil
+    if not jpegData or #jpegData < 3 then
+        return nil, "Thumbnail unavailable — try building Standard previews in Lightroom"
     end
 
-    -- Slow path: LrExportSession renders the photo directly from develop
-    -- settings, bypassing the preview cache. Always works, takes ~2-5 s.
-    local outPath = "/tmp/lr_mcp_preview.jpg"
-    LrFileUtils.delete(outPath)
+    -- Validate JPEG magic bytes; preview cache can occasionally return garbage.
+    local b1, b2, b3 = jpegData:byte(1), jpegData:byte(2), jpegData:byte(3)
+    if b1 ~= 0xFF or b2 ~= 0xD8 or b3 ~= 0xFF then
+        return nil, string.format("Preview has unexpected format (%02X %02X %02X) — rebuild previews", b1, b2, b3)
+    end
 
-    local exportOk, exportErr = pcall(function()
-        local LrExportSession = import "LrExportSession"
-        local session = LrExportSession {
-            photosToExport = { photo },
-            exportSettings = {
-                LR_export_destinationType    = "specificFolder",
-                LR_export_destinationPathPrefix = "/tmp",
-                LR_export_useSubfolder       = false,
-                LR_format                    = "JPEG",
-                LR_jpeg_quality              = 0.82,
-                LR_size_doConstrain          = true,
-                LR_size_maxHeight            = thumbSize,
-                LR_size_maxWidth             = thumbSize,
-                LR_size_resizeType           = "longEdge",
-                LR_size_units                = "pixels",
-                LR_outputSharpeningOn        = false,
-                LR_export_colorSpace         = "sRGB",
-                LR_reimportExportedPhoto     = false,
-                LR_collisionHandling         = "overwrite",
-                LR_removeLocationMetadata    = true,
-            },
-        }
-        for _, rendition in session:renditions() do
-            local success, pathOrMsg = rendition:waitForRender()
-            if success and pathOrMsg then
-                local f = io.open(pathOrMsg, "rb")
-                if f then
-                    local data = f:read("*a")
-                    f:close()
-                    LrFileUtils.delete(pathOrMsg)
-                    jpegData = data
-                end
-            end
-        end
+    log:info("exportPreview ok size=" .. #jpegData)
+    -- getRawMetadata requires a read lock; fetch orientation here.
+    local orientation = 1
+    local catalog = LrApplication.activeCatalog()
+    catalog:withReadAccessDo(function()
+        local v = photo:getRawMetadata("orientation")
+        log:info("getRawMetadata orientation=" .. tostring(v))
+        if v then orientation = v end
     end)
-
-    if not exportOk then
-        return nil, "Export error: " .. tostring(exportErr)
-    end
-
-    if not jpegData then
-        return nil, "Thumbnail timed out or unavailable"
-    end
-
-    return base64Encode(jpegData), nil
+    return base64Encode(jpegData), nil, orientation
 end
 
 local function batchApplySettings(settings)
@@ -468,7 +435,7 @@ local function batchApplySettings(settings)
     local skipped = 0
 
     for _, photo in ipairs(photos) do
-        catalog:withWriteAccessDo("Claude Batch Edit", function()
+        catalog:withWriteAccessDo("Batch Edit", function()
             local devSettings = {}
             for key, value in pairs(settings) do
                 local paramName = PARAM_INDEX[key:lower()] or key
@@ -495,7 +462,7 @@ local function cropPhoto(params)
     if not photo then return false, "No photo selected" end
 
     local applied = {}
-    catalog:withWriteAccessDo("Claude Crop", function()
+    catalog:withWriteAccessDo("Crop", function()
         -- Straighten/rotate angle
         if params.angle ~= nil then
             local ok, err = pcall(function()
@@ -614,7 +581,7 @@ local function lensBlur(params)
 
     local applied = {}
 
-    catalog:withWriteAccessDo("Claude Lens Blur", function()
+    catalog:withWriteAccessDo("Lens Blur", function()
         -- Activate / deactivate
         if params.active ~= nil then
             local v = params.active and 1 or 0
@@ -700,7 +667,7 @@ local function enhancePhoto(params)
     end
 
     local ok2, err2 = pcall(function()
-        catalog:withWriteAccessDo("Claude Enhance", function()
+        catalog:withWriteAccessDo("Enhance", function()
             LrDevelopController.setEnhance(opts)
         end, {timeout = 30})
     end)
@@ -726,7 +693,7 @@ local function handleRequest(data)
     local response = {}
 
     if cmd == "ping" then
-        response = { success = true, message = "Claude LR Bridge running" }
+        response = { success = true, message = "LR MCP Bridge running" }
 
     elseif cmd == "apply_settings" then
         local s, msg = applyDevelopSettings(req.settings or {})
@@ -749,9 +716,9 @@ local function handleRequest(data)
         response = { success = s, message = msg }
 
     elseif cmd == "export_preview" then
-        local b64, err = exportPreview(req.size)
+        local b64, err, orientation = exportPreview(req.size)
         if b64 then
-            response = { success = true, data = b64 }
+            response = { success = true, data = b64, orientation = orientation }
         else
             response = { success = false, error = err }
         end
@@ -801,7 +768,7 @@ function Server.start()
     -- Clean up any stale files from a previous run
     LrFileUtils.delete(REQ_FILE)
     LrFileUtils.delete(RES_FILE)
-    log:info("Claude LR Bridge v" .. VERSION .. " started (file IPC mode)")
+    log:info("LR MCP Bridge v" .. VERSION .. " started (file IPC mode)")
 
     local PROC_FILE = REQ_FILE .. ".processing"
     while Server._running and _clrb_gen == myGeneration do
@@ -829,7 +796,7 @@ function Server.start()
         LrTasks.sleep(POLL_INTERVAL)
     end
 
-    log:info("Claude LR Bridge stopped")
+    log:info("LR MCP Bridge stopped")
 end
 
 function Server.stop()

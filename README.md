@@ -1,16 +1,16 @@
-# Claude Lightroom Bridge
+# Lightroom MCP Bridge
 
-Control Lightroom Classic develop settings via Claude Desktop using MCP. Describe edits in plain English — Claude figures out the parameters and applies them instantly. With the preview tool, Claude can **see** your photo and give visual feedback on tone, color, and composition.
+Control Lightroom Classic develop settings from any MCP-compatible AI tool. Describe edits in plain English and the AI figures out the parameters and applies them instantly. With the preview tool, the AI can **see** your photo and give visual feedback on tone, color, and composition.
 
 ---
 
 ## How it works
 
 ```
-You (Claude Desktop) → MCP Server (Python/stdio) → File IPC (/tmp) → Lua Plugin → LrDevelopController
+MCP Client → MCP Server (Python/stdio) → File IPC (/tmp) → Lua Plugin → LrDevelopController
 ```
 
-The Python MCP server communicates with Claude Desktop over stdio. It sends commands to the Lightroom plugin by writing JSON to `/tmp/lr_mcp_req.json` and polling for a response at `/tmp/lr_mcp_res.json`. The Lua plugin running inside Lightroom polls that file every 50ms, processes commands via `LrDevelopController`, and writes results back. No network connection or open ports required.
+The Python MCP server communicates with your AI tool over stdio. It sends commands to the Lightroom plugin by writing JSON to `/tmp/lr_mcp_req.json` and polling for a response at `/tmp/lr_mcp_res.json`. The Lua plugin running inside Lightroom polls that file every 50ms, processes commands via `LrDevelopController`, and writes results back. No network connection or open ports required.
 
 ---
 
@@ -18,28 +18,28 @@ The Python MCP server communicates with Claude Desktop over stdio. It sends comm
 
 - **Lightroom Classic** (any recent version)
 - **Python 3.9+**
-- **Claude Desktop** with an active Claude subscription/any tool that supports MCP
+- **Any MCP-compatible AI tool** (Claude Desktop, Cursor, Windsurf, etc.)
 
 ---
 
 ## Setup
 
-### Step 1 — Install the Lightroom plugin
+### Step 1: Install the Lightroom plugin
 
 1. Open Lightroom Classic
 2. Go to **File → Plug-in Manager**
 3. Click **Add** at the bottom left
-4. Navigate to `lrplugin/` in this repo and select the `claude-lr-bridge.lrdevplugin` folder
+4. Navigate to `lrplugin/` in this repo and select the `lightroom-mcp.lrdevplugin` folder
 5. Click **Add Plug-in**
 6. Confirm the plugin status shows **Enabled**
 
-The plugin auto-starts the bridge whenever Lightroom opens — **you do not need to start it manually each time**. The `LrInitPlugin` hook fires on every Lightroom launch and begins the file-polling loop automatically.
+The plugin auto-starts the bridge whenever Lightroom opens; **you do not need to start it manually each time**. The `LrInitPlugin` hook fires on every Lightroom launch and begins the file-polling loop automatically.
 
-> **Manual control:** If `lr_ping` fails after a fresh Lightroom start (e.g. after reloading the plugin mid-session from Plug-in Manager), you can kick it manually via **File → Plug-in Extras → Start Claude LR Bridge**. This is a fallback — under normal operation Lightroom starts it for you.
+> **Manual control:** If `lr_ping` fails after a fresh Lightroom start (e.g. after reloading the plugin mid-session from Plug-in Manager), you can kick it manually via **File → Plug-in Extras → Start MCP Bridge Server**. This is a fallback; under normal operation Lightroom starts it for you.
 
 ---
 
-### Step 2 — Install the MCP server
+### Step 2: Install the MCP server
 
 Open a terminal and run:
 
@@ -54,23 +54,20 @@ Verify it works:
 
 ```bash
 python3 server.py
-# Should print nothing and wait — that's correct. Ctrl-C to stop.
+# Should print nothing and wait (that's correct). Ctrl-C to stop.
 ```
 
 Note the **full absolute path** to both `venv/bin/python3` and `server.py`. You'll need these in the next step.
 
 ---
 
-### Step 3 — Configure Claude Desktop
+### Step 3: Configure your MCP client
 
-Open the Claude Desktop config file:
+Point your MCP-compatible AI tool at the server. The config format varies by tool, but the command is always the same: the venv Python running `server.py`.
 
-| Platform | Path                                                              |
-| -------- | ----------------------------------------------------------------- |
-| macOS    | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows  | `%APPDATA%\Claude\claude_desktop_config.json`                     |
+**Example: Claude Desktop**
 
-Add the `lightroom` server entry. Replace the paths with your actual paths:
+Open `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) and add:
 
 ```json
 {
@@ -85,41 +82,37 @@ Add the `lightroom` server entry. Replace the paths with your actual paths:
 
 > **Important:** Use the full path to the **venv** Python (not the system `python3`). The venv Python has `mcp` installed; the system one doesn't.
 
-**Restart Claude Desktop** after saving. The MCP tools load at startup.
+Restart your AI tool after saving. The MCP tools load at startup.
 
 ---
 
-### Step 4 — Verify the connection
+### Step 4: Verify the connection
 
-In Claude Desktop, type:
+Ask your AI tool to ping Lightroom (e.g. "Ping Lightroom"). It will call `lr_ping`. If the plugin is running you'll see:
 
-> "Ping Lightroom"
-
-Claude will call `lr_ping`. If the plugin is running you'll see:
-
-> ✓ Connected. Claude LR Bridge running.
+> ✓ Connected. LR MCP Bridge running.
 
 If it fails, see [Troubleshooting](#troubleshooting).
 
 ---
 
-## Using from Claude Desktop
+## Usage
 
-Once set up, talk to Claude naturally. You don't need to know any parameter names — Claude translates your intent into slider values.
+Once set up, describe what you want naturally. You don't need to know any parameter names; the AI translates your intent into slider values.
 
 ### Basic editing
 
 ```
 "Show me the current photo"
-→ Claude calls lr_export_preview and displays the JPEG inline
+→ calls lr_export_preview and displays the JPEG inline
 
 "This looks underexposed, fix it"
-→ Claude calls lr_apply_settings with Exposure +1.2
+→ lr_apply_settings with Exposure +1.2
 
 "Add some warmth and lift the shadows"
 → Temperature +800, Shadows +25
 
-"It's too green — reduce the green saturation and shift the hue"
+"It's too green: reduce the green saturation and shift the hue"
 → SaturationAdjustmentGreen -40, HueAdjustmentGreen +15
 
 "The sky looks blown out"
@@ -131,7 +124,7 @@ Once set up, talk to Claude naturally. You don't need to know any parameter name
 
 ### Visual feedback workflow
 
-The most powerful workflow: ask Claude to look at the photo, then iterate.
+The most powerful workflow: ask the AI to look at the photo, then iterate.
 
 ```
 "Show me the photo"                          → lr_export_preview
@@ -147,18 +140,18 @@ Select multiple photos in Lightroom, then:
 
 ```
 "Denoise all selected photos"
-→ lr_batch_apply_settings with LuminanceSmoothing 60, ColorNoiseReduction 50
+→ lr_batch_apply_settings  LuminanceSmoothing 60, ColorNoiseReduction 50
 
 "Apply the same exposure correction to all selected shots"
-→ lr_batch_apply_settings with Exposure +0.8
+→ lr_batch_apply_settings  Exposure +0.8
 
 "Give all these photos a consistent warm grade"
-→ lr_batch_apply_settings with Temperature 6800, Shadows +15, Highlights -20
+→ lr_batch_apply_settings  Temperature 6800, Shadows +15, Highlights -20
 ```
 
 ### Masking
 
-AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`, `luminance`, `color`, `depth`) are placed automatically. Manual types (`gradient`, `radialGradient`, `brush`) activate the tool — the user draws the mask in Lightroom.
+AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`, `luminance`, `color`, `depth`) are placed automatically. Manual types (`gradient`, `radialGradient`, `brush`) activate the tool; the user draws the mask in Lightroom.
 
 ```
 "Darken the sky"
@@ -193,7 +186,7 @@ AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`,
 | `lr_ping`                 | Check the connection is working                               |
 | `lr_get_settings`         | Read all current develop slider values + filename + rating    |
 | `lr_apply_settings`       | Apply develop parameters to the selected photo                |
-| `lr_export_preview`       | Export a JPEG preview — Claude sees the photo inline          |
+| `lr_export_preview`       | Export a JPEG preview; AI client sees the photo inline        |
 | `lr_batch_apply_settings` | Apply develop parameters to **all** currently selected photos |
 | `lr_auto_tone`            | Run Lightroom's Auto Tone                                     |
 | `lr_reset`                | Reset all develop settings to defaults                        |
@@ -229,7 +222,7 @@ AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`,
 | Vibrance    | -100 to 100  |
 | Saturation  | -100 to 100  |
 
-**HSL** — append Red / Orange / Yellow / Green / Aqua / Blue / Purple / Magenta
+**HSL** (append Red / Orange / Yellow / Green / Aqua / Blue / Purple / Magenta)
 
 | Parameter              | Range       |
 | ---------------------- | ----------- |
@@ -282,7 +275,7 @@ AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`,
 | ColorGradeHighlightLum | -100 to 100 |
 | ColorGradeShadowLum    | -100 to 100 |
 
-**B&W Mix** — append Red / Orange / Yellow / Green / Aqua / Blue / Purple / Magenta
+**B&W Mix** (append Red / Orange / Yellow / Green / Aqua / Blue / Purple / Magenta)
 
 | Parameter   | Range       |
 | ----------- | ----------- |
@@ -307,7 +300,7 @@ AI mask types (`subject`, `sky`, `background`, `objects`, `people`, `landscape`,
 | DefringePurpleAmount   | 0–100 |
 | DefringePurpleHueHi/Lo | 0–100 |
 
-Parameter names are **case-insensitive** — Claude can pass `exposure` or `Exposure` and the plugin normalises it.
+Parameter names are **case-insensitive**: `exposure` and `Exposure` both work; the plugin normalises them.
 
 ---
 
@@ -317,15 +310,15 @@ Parameter names are **case-insensitive** — Claude can pass `exposure` or `Expo
 
 - Confirm Lightroom Classic is open (not Lightroom CC)
 - Check the plugin is **Enabled** in File → Plug-in Manager
-- Try starting it manually: **File → Plug-in Extras → Start Claude LR Bridge** (available in any module)
+- Try starting it manually: **File → Plug-in Extras → Start MCP Bridge Server** (available in any module)
 
-**Lightroom tools not appearing in Claude Desktop**
+**Lightroom tools not appearing in your AI tool**
 
-- Confirm the paths in `claude_desktop_config.json` are absolute and correct
+- Confirm the paths in your MCP config are absolute and correct
 - Confirm you're pointing to the **venv** Python, not the system Python
-- Restart Claude Desktop (not just reload — fully quit and reopen)
-- Open the Claude Desktop developer console (if available) to check for MCP connection errors
-- Test the server directly: `cd mcp-server && venv/bin/python3 server.py` — should start silently
+- Fully restart your AI tool (not just reload) after config changes
+- Check your AI tool's MCP logs or developer console for connection errors
+- Test the server directly: `cd mcp-server && venv/bin/python3 server.py` (should start silently)
 
 **Edits not applying to the photo**
 
@@ -351,10 +344,10 @@ python3 mock_lr.py                    # polls /tmp/lr_mcp_req.json (file IPC)
 pytest tests/ -v                      # run all 9 tests
 ```
 
-The mock simulates all commands, generates color-shifting JPEG previews based on Temperature, and tracks state across calls — so you can test the full Python layer without Lightroom installed.
+The mock simulates all commands, generates color-shifting JPEG previews based on Temperature, and tracks state across calls, so you can test the full Python layer without Lightroom installed.
 
 ---
 
 ## Reference
 
-- [Lightroom Classic SDK Guide](docs/Lightroom%20Classic%20SDK%20Guide.pdf) — official Adobe SDK documentation covering all `LrDevelopController` APIs, plugin lifecycle, and Lua sandbox constraints.
+- [Lightroom Classic SDK Guide](docs/Lightroom%20Classic%20SDK%20Guide.pdf): official Adobe SDK documentation covering all `LrDevelopController` APIs, plugin lifecycle, and Lua sandbox constraints.

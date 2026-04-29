@@ -10,8 +10,8 @@ Claude Desktop → MCP Server (Python/stdio) → File IPC (/tmp) → Lua Plugin 
 
 Two components that must work in tandem:
 
-- **`mcp-server/server.py`** — Python MCP server communicating with Claude Desktop over stdio. Writes JSON commands to `/tmp/lr_mcp_req.json` and polls for `/tmp/lr_mcp_res.json`.
-- **`lrplugin/claude-lr-bridge.lrdevplugin/`** — Lightroom Classic plugin (Lua) that polls `/tmp/lr_mcp_req.json` every 50ms inside an async task. Processes commands via `LrDevelopController` APIs and writes results to `/tmp/lr_mcp_res.json`.
+- **`mcp-server/server.py`**: Python MCP server communicating with Claude Desktop over stdio. Writes JSON commands to `/tmp/lr_mcp_req.json` and polls for `/tmp/lr_mcp_res.json`.
+- **`lrplugin/lightroom-mcp.lrdevplugin/`**: Lightroom Classic plugin (Lua) that polls `/tmp/lr_mcp_req.json` every 50ms inside an async task. Processes commands via `LrDevelopController` APIs and writes results to `/tmp/lr_mcp_res.json`.
 
 Both components are always upgraded together. There is no backwards compatibility between versions.
 
@@ -53,7 +53,7 @@ pytest tests/ -v                      # run all tests against the mock
 | `lr_ping`                 | Check the connection to the Lightroom plugin                       |
 | `lr_get_settings`         | Read all develop slider values + filename + rating                 |
 | `lr_apply_settings`       | Apply develop parameters to the selected photo                     |
-| `lr_export_preview`       | Export a JPEG thumbnail; Claude sees it inline for visual feedback |
+| `lr_export_preview`       | Export a JPEG thumbnail; the AI client sees it inline for visual feedback |
 | `lr_batch_apply_settings` | Apply develop parameters to all currently selected photos          |
 | `lr_auto_tone`            | Run Lightroom's Auto Tone on the selected photo                    |
 | `lr_reset`                | Reset all develop settings to defaults                             |
@@ -71,7 +71,7 @@ pytest tests/ -v                      # run all tests against the mock
 
 Returns MCP `ImageContent` (JPEG). Typical workflow:
 
-1. Call `lr_export_preview` — Claude sees the photo
+1. Call `lr_export_preview` to see the photo
 2. Analyze tone, color, sky, etc. visually
 3. Call `lr_apply_settings` with suggested changes
 4. Call `lr_export_preview` again to verify
@@ -82,7 +82,7 @@ Returns MCP `ImageContent` (JPEG). Typical workflow:
 { "settings": { "Exposure": 0.5, "Highlights": -30 } }
 ```
 
-Parameter names are case-insensitive. `lr_batch_apply_settings` uses `catalog:getTargetPhotos()` — all photos currently selected in Lightroom.
+Parameter names are case-insensitive. `lr_batch_apply_settings` uses `catalog:getTargetPhotos()` (all photos currently selected in Lightroom).
 
 ### lr_add_mask
 
@@ -95,12 +95,12 @@ Parameter names are case-insensitive. `lr_batch_apply_settings` uses `catalog:ge
 
 `maskType` selects the mask shape/detection method. Mask types fall into two categories:
 
-- **Automatic** (no user interaction): `subject`, `sky`, `background`, `objects`, `people`, `landscape`, `luminance`, `color`, `depth` — LR detects and places the mask immediately.
-- **Manual** (user must draw after the call): `gradient`, `radialGradient`, `brush` — the call activates the tool; the user drags/paints to define the mask area.
+- **Automatic** (no user interaction): `subject`, `sky`, `background`, `objects`, `people`, `landscape`, `luminance`, `color`, `depth`. LR detects and places the mask immediately.
+- **Manual** (user must draw after the call): `gradient`, `radialGradient`, `brush`. The call activates the tool; the user drags/paints to define the mask area.
 
 The optional `adjustments` object applies local develop slider values to the newly created mask. Supported params: `Exposure`, `Contrast`, `Highlights`, `Shadows`, `Whites`, `Blacks`, `Clarity`, `Texture`, `Dehaze`, `Vibrance`, `Saturation`, `Temperature`, `Tint`, `Sharpness`, `LuminanceNoise`, `ColorNoise`, `MoireFilter`, `Defringe`, `ToningHue`, `ToningSaturation`.
 
-Implementation: `LrDevelopController.createNewMask()` is called directly (no `catalog:withWriteAccessDo` — wrapping it causes the mask to be rolled back). Adjustments are applied via `LrDevelopController.setValue("local_*")` on the active mask immediately after.
+Implementation: `LrDevelopController.createNewMask()` is called directly (no `catalog:withWriteAccessDo`; wrapping it causes the mask to be rolled back). Adjustments are applied via `LrDevelopController.setValue("local_*")` on the active mask immediately after.
 
 ### lr_update_mask
 
@@ -234,23 +234,23 @@ Valid `bokeh` values: `Circle`, `SoapBubble`, `Blade`, `Ring`, `Anamorphic`.
 
 Triggers AI processing that creates a new enhanced DNG file; runs in the background after the call returns.
 
-Key files in `lrplugin/claude-lr-bridge.lrdevplugin/`:
+Key files in `lrplugin/lightroom-mcp.lrdevplugin/`:
 
-- `Info.lua` — plugin manifest; registers menu items and `InitPlugin.lua`
-- `InitPlugin.lua` — auto-starts the bridge on Lightroom launch via `LrInitPlugin`
-- `Server.lua` — file IPC polling loop, base64, JSON, and all develop logic
-- `StartServer.lua` / `StopServer.lua` — manual fallback start/stop menu items
+- `Info.lua`: plugin manifest; registers menu items and `InitPlugin.lua`
+- `InitPlugin.lua`: auto-starts the bridge on Lightroom launch via `LrInitPlugin`
+- `Server.lua`: file IPC polling loop, base64, JSON, and all develop logic
+- `StartServer.lua` / `StopServer.lua`: manual fallback start/stop menu items
 
 ## Reference
 
-- [Lightroom Classic SDK Guide](docs/Lightroom%20Classic%20SDK%20Guide.pdf) — official Adobe SDK documentation. Key sections: `LrDevelopController` API reference, `LrTasks` async model, plugin manifest keys, Lua sandbox restrictions.
+- [Lightroom Classic SDK Guide](docs/Lightroom%20Classic%20SDK%20Guide.pdf): official Adobe SDK documentation. Key sections: `LrDevelopController` API reference, `LrTasks` async model, plugin manifest keys, Lua sandbox restrictions.
 
-## Versioning — MANDATORY
+## Versioning (MANDATORY)
 
 **Every change to `Server.lua` MUST bump the version in both places or the running build will be impossible to identify in logs.**
 
-1. `lrplugin/claude-lr-bridge.lrdevplugin/Info.lua` — `VERSION = { major, minor, revision }`
-2. `lrplugin/claude-lr-bridge.lrdevplugin/Server.lua` — `local VERSION = "x.y.z"`
+1. `lrplugin/lightroom-mcp.lrdevplugin/Info.lua`: `VERSION = { major, minor, revision }`
+2. `lrplugin/lightroom-mcp.lrdevplugin/Server.lua`: `local VERSION = "x.y.z"`
 
 Both must always match. The version is logged on every server start:
 ```
@@ -264,15 +264,15 @@ Claude LR Bridge v1.1.0 started (file IPC mode)
 ### Plugin log (primary debug source)
 
 ```
-~/Library/Logs/Adobe/Lightroom/LrClassicLogs/ClaudeLRBridge.log
+~/Library/Logs/Adobe/Lightroom/LrClassicLogs/LrMCPBridge.log
 ```
 
-Written by `LrLogger("ClaudeLRBridge")` with `log:enable("logfile")`. Appended across sessions. Contains:
+Written by `LrLogger("LrMCPBridge")` with `log:enable("logfile")`. Appended across sessions. Contains:
 - Server start/stop with version
 - All `log:info` / `log:error` calls from `Server.lua`
 - `requestJpegThumbnail` diagnostics, response write confirmations, etc.
 
-To tail live: `tail -f ~/Library/Logs/Adobe/Lightroom/LrClassicLogs/ClaudeLRBridge.log`
+To tail live: `tail -f ~/Library/Logs/Adobe/Lightroom/LrClassicLogs/LrMCPBridge.log`
 
 ### Lightroom console log (Lua runtime errors)
 
@@ -286,9 +286,9 @@ Contains Lua stack traces from unhandled errors inside Lightroom's plugin sandbo
 
 After any plugin restart, verify the correct version loaded:
 ```
-tail -3 ~/Library/Logs/Adobe/Lightroom/LrClassicLogs/ClaudeLRBridge.log
+tail -3 ~/Library/Logs/Adobe/Lightroom/LrClassicLogs/LrMCPBridge.log
 ```
-Expected: `Claude LR Bridge vX.Y.Z started (file IPC mode)` with no "Server already running" after it (which would indicate a double-start race).
+Expected: `LR MCP Bridge vX.Y.Z started (file IPC mode)` with no "Server already running" after it (which would indicate a double-start race).
 
 ## Adding New Commands
 

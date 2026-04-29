@@ -5,6 +5,8 @@ Exposes Lightroom develop controls as MCP tools for Claude Desktop.
 Communicates with the Lua plugin running inside Lightroom via file-based IPC.
 """
 
+import base64
+import io
 import json
 import os
 import time
@@ -17,6 +19,37 @@ REQ_FILE = os.environ.get("LR_MCP_REQ", "/tmp/lr_mcp_req.json")
 RES_FILE = os.environ.get("LR_MCP_RES", "/tmp/lr_mcp_res.json")
 TIMEOUT = 10.0   # seconds to wait for Lua to respond
 POLL = 0.05   # seconds between polls
+TARGET_IMAGE_BYTES = 1 * 1024 * 1024  # 1 MB target for preview images
+
+
+def _compress_preview(b64_data: str, max_long_edge: int = 1500, orientation=1) -> str:
+    """Resize, correct orientation, and compress preview to stay under TARGET_IMAGE_BYTES."""
+    from PIL import Image
+
+    raw = base64.b64decode(b64_data)
+    img = Image.open(io.BytesIO(raw))
+
+    # LR getRawMetadata("orientation") two-letter codes indicate where the stored top/right edges are:
+    # "AB"=normal, "BC"=stored 90°CCW (top→right), "CD"=stored 180°, "DA"=stored 90°CW (top→left)
+    _LR_ORIENT_ROTATE = {
+        "BC": Image.Transpose.ROTATE_270,  # stored 90°CCW → rotate 90°CW to correct
+        "CD": Image.Transpose.ROTATE_180,
+        "DA": Image.Transpose.ROTATE_90,   # stored 90°CW → rotate 90°CCW to correct
+    }
+    transpose_op = _LR_ORIENT_ROTATE.get(str(orientation) if orientation else "AB")
+    if transpose_op is not None:
+        img = img.transpose(transpose_op)
+
+    img.thumbnail((max_long_edge, max_long_edge), Image.LANCZOS)
+
+    for quality in (85, 75, 60, 45):
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality)
+        if buf.tell() <= TARGET_IMAGE_BYTES:
+            return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
 
 app = Server("lightroom-bridge")
 
@@ -340,11 +373,16 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         result = send_to_lightroom(
             {"command": "export_preview", "size": size}, timeout=30.0)
         if result.get("success") and result.get("data"):
+            img_data = _compress_preview(
+                result["data"],
+                max_long_edge=size,
+                orientation=result.get("orientation", 1),
+            )
             return [
                 types.ImageContent(
                     type="image",
                     mimeType="image/jpeg",
-                    data=result["data"],
+                    data=img_data,
                 )
             ]
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
